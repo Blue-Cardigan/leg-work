@@ -44,8 +44,9 @@ async function fetchAndParse(url: string, type: string, year: string): Promise<P
       .map((link): Partial<ParsedLegislationItem> => {
         const title = link.textContent.trim();
         const relativeHref = link.getAttribute('href');
-        const idMatch = relativeHref?.match(/\/(\d+|[a-zA-Z0-9]+)\/contents$/);
-        const identifier = idMatch ? idMatch[1] : null;
+        // Updated regex to handle more complex identifiers (like ISBNS/URNs)
+        const idMatch = relativeHref?.match(/\/([a-zA-Z0-9-]+(?:\/[a-zA-Z0-9-]+)*)\/contents$/);
+        const identifier = idMatch ? idMatch[1] : null; 
         const fullHref = relativeHref ? `https://www.legislation.gov.uk${relativeHref}` : null;
 
         return {
@@ -86,7 +87,18 @@ export async function GET() {
 
   try {
     const results = await Promise.all(allFetchPromises);
-    const allItems = results.flat(); // Combine results from all fetches
+    const allItemsRaw = results.flat(); // Combine results from all fetches
+
+    // --- FIX: De-duplicate the list based on href --- 
+    const uniqueItemsMap = new Map<string, ParsedLegislationItem>();
+    allItemsRaw.forEach(item => {
+      if (!uniqueItemsMap.has(item.href)) { // Use href as the unique key
+        uniqueItemsMap.set(item.href, item);
+      }
+    });
+    const allItems = Array.from(uniqueItemsMap.values());
+    console.log(`De-duplicated items. Raw count: ${allItemsRaw.length}, Unique count: ${allItems.length}`);
+    // --- END FIX ---
 
     // Sort by year (descending) and then title (ascending) for consistent initial display
     allItems.sort((a, b) => {
@@ -96,7 +108,7 @@ export async function GET() {
         return a.title.localeCompare(b.title);
     });
 
-    console.log(`Total draft legislation items fetched: ${allItems.length}`);
+    console.log(`Total unique draft legislation items returned: ${allItems.length}`);
     // The NextResponse itself is cached based on the route segment config or default behavior.
     // The individual fetch calls inside have their own revalidate settings.
     return NextResponse.json(allItems);

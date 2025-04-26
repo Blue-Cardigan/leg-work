@@ -12,6 +12,7 @@
     "@google/generative-ai": "^0.24.0",
     "@supabase/supabase-js": "^2.49.4",
     "@types/sanitize-html": "^2.15.0",
+    "immer": "^10.1.1",
     "next": "15.3.1",
     "node-html-parser": "^7.0.1",
     "react": "^19.0.0",

@@ -1,24 +1,34 @@
 'use client';
 
 import React from 'react';
-import { useAppStore } from '@/lib/store/useAppStore'; // Adjust path if needed
+import { useAppStore, TocItem } from '@/lib/store/useAppStore'; // Adjust path if needed
 import sanitizeHtml from 'sanitize-html';
 
 // Allowed tags and attributes for sanitized intro text
 const sanitizeOptions = {
-    allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'blockquote', 'a', 'strong', 'em', 'u', 'span', 'br', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td']),
+    allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'blockquote', 'a', 'strong', 'em', 'u', 'span', 'br', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'section']),
     allowedAttributes: {
         ...sanitizeHtml.defaults.allowedAttributes,
-        a: ['href', 'name', 'target'],
+        a: ['href', 'name', 'target', 'id'],
         img: ['src', 'srcset', 'alt', 'title', 'width', 'height', 'loading'],
-        '*': ['class', 'id', 'style'] // Allow class, id, style globally (be cautious with style)
+        '*': ['class', 'id', 'style'] // Allow class, id, style globally
     },
-    // Allow style attribute with specific safe properties if needed, otherwise remove it
-    // allowedStyles: { '* ': { 'color ': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(/] } }
+};
+
+// Helper function to generate safe IDs from titles or hrefs
+const generateSafeId = (input: string): string => {
+    return input
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, ' ') // Remove invalid chars
+        .trim()
+        .replace(/\s+/g, '-') // Replace spaces with hyphens
+        .replace(/-+/g, '-'); // Replace multiple hyphens with single
 };
 
 export default function MainContent() {
   const { selectedLegislation, selectedLegislationContent, isLoadingContent } = useAppStore();
+
+  console.log('[MainContent] Rendering. isLoading:', isLoadingContent, 'Content:', selectedLegislationContent);
 
   if (isLoadingContent) {
     return (
@@ -38,15 +48,13 @@ export default function MainContent() {
     return <div className="flex-grow p-6 text-center text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-900">Select legislation from the sidebar to view its content.</div>;
   }
 
-  // Handle the case where loading is finished but content failed to load or doesn't exist
   if (!selectedLegislationContent) {
+      console.log('[MainContent] Error: selectedLegislationContent is falsy after loading.', selectedLegislationContent);
       return <div className="flex-grow p-6 text-center text-gray-400 bg-white dark:bg-gray-900">No content available or failed to load for this item.</div>;
   }
 
   const { introHtml, toc } = selectedLegislationContent;
-  // Sanitize only if introHtml is not null
   const cleanIntroHtml = introHtml ? sanitizeHtml(introHtml, sanitizeOptions) : null;
-
 
   return (
     <div className="flex-grow p-6 overflow-y-auto bg-white dark:bg-gray-900">
@@ -56,36 +64,89 @@ export default function MainContent() {
       {cleanIntroHtml ? (
          <div className="prose dark:prose-invert max-w-none mb-6 legislation-intro" dangerouslySetInnerHTML={{ __html: cleanIntroHtml }} />
       ) : (
-        // Explicitly check if introHtml is null (meaning fetch happened but no intro was found)
-        // vs. selectedLegislationContent being null (meaning fetch failed or didn't happen)
         introHtml === null &&
         <p className="text-gray-500 dark:text-gray-400 italic mb-6">No introductory text found for this document.</p>
       )}
 
-
-      {/* Display Table of Contents */}
+      {/* Display Navigable Table of Contents */}
       {toc && toc.length > 0 && (
-          <details className="mb-6 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700" open>
+          <details className="mb-8 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 sticky top-0 z-10" open>
               <summary className="cursor-pointer p-3 font-semibold text-lg text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-t list-none">
                   Table of Contents
               </summary>
-              <ul className="p-4 border-t border-gray-200 dark:border-gray-700">
-                  {toc.map((item, index) => (
-                      <li key={`${item.fullHref}-${index}`} style={{ marginLeft: `${item.level * 1.5}rem` }} className="mb-1">
-                          {/* Links don't navigate yet, just display */}
-                           <span className="text-sm text-blue-600 dark:text-blue-400 hover:underline" title={item.fullHref}>
-                               {item.title}
-                           </span>
-                      </li>
-                  ))}
+              <ul className="p-4 border-t border-gray-200 dark:border-gray-700 max-h-60 overflow-y-auto">
+                  {toc.map((item: TocItem, index: number) => {
+                      // Generate a unique ID for linking. Use title or part of href.
+                      const sectionId = generateSafeId(item.title || `section-${index}`);
+                      // Check if it's a placeholder heading link
+                      const isHeading = item.fullHref.includes('#heading-');
+                      return (
+                          <li key={`${item.fullHref}-${index}`} style={{ marginLeft: `${item.level * 1.5}rem` }} className="mb-1">
+                             {/* Render as plain text if it's just a heading, otherwise render link */}
+                             {isHeading ? (
+                                <span 
+                                   className="text-sm text-gray-700 dark:text-gray-300 font-semibold"
+                                   title={item.title} // Add title for accessibility/tooltip
+                                >
+                                   {item.title}
+                                </span>
+                             ) : (
+                                <a
+                                    href={`#${sectionId}`}
+                                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+                                    title={`Jump to: ${item.title}`}
+                                >
+                                    {item.title}
+                                </a>
+                             )}
+                          </li>
+                      );
+                   })}
               </ul>
           </details>
       )}
 
-      {/* Placeholder for actual editor/viewer */}
-      {/* <div className="mt-6 border-t pt-4 border-gray-200 dark:border-gray-700">
-          <p className="text-gray-500 italic">Legislation content viewer/editor will go here.</p>
-      </div> */}
+      {/* Display Content Sections */}
+      <div className="legislation-content space-y-6">
+        {toc && toc.length > 0 ? (
+             toc.map((item: TocItem, index: number) => {
+                // Skip rendering content sections for placeholder headings
+                if (item.fullHref.includes('#heading-')) {
+                    return null; 
+                }
+                const sectionId = generateSafeId(item.title || `section-${index}`);
+                const sectionHtml = selectedLegislationContent.sectionsHtml?.[item.fullHref];
+                const displayHtml = sectionHtml ? sanitizeHtml(sectionHtml, sanitizeOptions) : '<p class="text-gray-500 italic">Content loading or not available...</p>';
+
+                return (
+                  <section key={item.fullHref} id={sectionId} className="legislation-section border-t border-gray-200 dark:border-gray-700 pt-4 scroll-mt-20">
+                      <h2 className="text-xl font-semibold mb-3 text-gray-800 dark:text-gray-200">{item.title}</h2>
+                       <div
+                          className="prose dark:prose-invert max-w-none"
+                          dangerouslySetInnerHTML={{ __html: displayHtml /* Use actual sanitized content or placeholder */ }}
+                       />
+                  </section>
+                );
+            })
+        ) : (
+            !cleanIntroHtml && <p className="text-gray-500 dark:text-gray-400 italic mt-6">No content sections found for this document.</p>
+        )}
+      </div>
+
+       {/* Link to original source */}
+       {selectedLegislation && selectedLegislation.href && (
+         <div className="mt-8 pt-4 border-t border-gray-200 dark:border-gray-700 text-center">
+           <a 
+             href={selectedLegislation.href} 
+             target="_blank" 
+             rel="noopener noreferrer"
+             className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
+           >
+             View Original Source on legislation.gov.uk
+           </a>
+         </div>
+       )}
+
     </div>
   );
-} 
+}
