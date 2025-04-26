@@ -5,7 +5,8 @@ import LeftSidebar from "@/components/LeftSidebar";
 import MainContent from "@/components/MainContent";
 import RightSidebar from "@/components/RightSidebar";
 import TableOfContents from '@/components/TableOfContents'; // Import TOC component
-import { useAppStore, useIsSidebarCollapsed } from '@/lib/store/useAppStore'; // Import store and specific hook
+import CommentDisplaySidebar from '@/components/CommentDisplaySidebar'; // Import Comment Display Sidebar
+import { useAppStore, useIsSidebarCollapsed, useIsCommentSidebarOpen } from '@/lib/store/useAppStore'; // Import store and specific hooks
 // Removed LegislationProvider - Assuming Zustand handles context
 // import { LegislationProvider } from "@/context/LegislationContext";
 
@@ -18,6 +19,7 @@ export default function Home() {
   const selectedLegislationContent = useAppStore((state) => state.selectedLegislationContent);
   const selectedLegislation = useAppStore((state) => state.selectedLegislation); // Needed to check if TOC should display
   const isSidebarCollapsed = useIsSidebarCollapsed(); // Get sidebar state
+  const isCommentSidebarOpen = useIsCommentSidebarOpen(); // Get comment sidebar state
 
   // --- Handlers --- 
   const handleTocItemVisible = (id: string) => {
@@ -38,9 +40,9 @@ export default function Home() {
 
   return (
     // Removed LegislationProvider wrapper
-      <div className="flex h-full bg-white dark:bg-gray-900">
+      <div className="flex h-full bg-white dark:bg-gray-900 overflow-hidden">
         {/* Left Sidebar - Container width is handled internally */}
-        <div className="flex-shrink-0 h-full border-r border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800"> 
+        <div className="flex-shrink-0 h-full border-r border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-800 z-10">
           <LeftSidebar 
             activeTocId={activeTocId} 
             isTocVisible={isTocVisible} // Pass state down
@@ -60,8 +62,15 @@ export default function Home() {
 
         {/* Main Content Area */}
         <div className="flex-grow overflow-y-auto h-full">
-          <MainContent onSectionVisible={handleTocItemVisible} /> {/* Pass handler down */} 
+          <MainContent />
         </div>
+
+        {/* Comment Display Sidebar - Shown if legislation selected AND toggled on */}
+        {selectedLegislation && isCommentSidebarOpen && (
+            <div className="w-80 flex-shrink-0 h-full border-l border-gray-200 dark:border-gray-700 overflow-y-auto bg-gray-50 dark:bg-gray-800/50 transition-all duration-300 ease-in-out">
+                <CommentDisplaySidebar onCardClick={handleTocItemVisible} />
+            </div>
+        )}
 
         {/* Right Sidebar (Chat) */}
         <div className="w-1/4 min-w-[300px] flex-shrink-0 bg-gray-50 dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto h-full">

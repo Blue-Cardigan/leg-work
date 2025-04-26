@@ -11,6 +11,7 @@ export interface LegislationItem {
   identifier: string; // Unique ID (e.g., uksi/2023/123)
   type: string;
   year: string;
+  isAmendment?: boolean; // Add optional property for filtering
 }
 
 // --- Define TOC Item Structure ---
@@ -93,12 +94,17 @@ interface AppState {
   isSidebarCollapsed: boolean;
   // --- END NEW ---
 
+  // --- Add state for combined content ---
+  fullDocumentHtml: string | null;
+  isSubmitting: boolean; // Ensure this exists
+  submitStatus: { type: 'success' | 'error'; message: string } | null; // Ensure this exists
+
   // Actions are now top-level methods
   fetchLegislationList: () => Promise<void>;
   setSearchTerm: (term: string) => void;
   setSelectedTypes: (types: string[]) => void; 
   setSelectedLegislation: (item: LegislationItem | null) => void;
-  fetchLegislationContent: (url: string) => Promise<void>;
+  fetchLegislationContent: (urlToFetch: string) => Promise<void>;
   resetContent: () => void;
   // --- NEW: Chat Actions ---
   sendChatMessage: (messageText: string) => Promise<void>;
@@ -126,6 +132,15 @@ interface AppState {
   setOriginalContent: (content: LegislationContent | null) => void; // Internal action
   submitChangesForReview: () => Promise<{ success: boolean; error?: string }>;
   // --- End Add back ---
+
+  // --- Add state for comment sidebar visibility ---
+  isCommentSidebarOpen: boolean;
+
+  // --- Add action for combined content ---
+  setFullDocumentHtml: (html: string) => void;
+
+  // --- Add action for comment sidebar ---
+  toggleCommentSidebar: () => void;
 }
 
 // Type definition for the Supabase table row (needed for submit action)
@@ -184,6 +199,11 @@ export const useAppStore = create(
     // --- NEW: Sidebar Initial State ---
     isSidebarCollapsed: false,
     // --- END NEW ---
+
+    // --- Add state for combined content ---
+    fullDocumentHtml: null,
+    isSubmitting: false,
+    submitStatus: null,
 
     // --- Actions are now defined directly --- 
     fetchLegislationList: async () => {
@@ -270,10 +290,10 @@ export const useAppStore = create(
       set((state) => {
         state.selectedLegislation = item;
         state.selectedLegislationContent = null; 
-        state.originalLegislationContent = null; 
+        state.fullDocumentHtml = null; // Explicitly clear combined HTML
         state.errorContent = null;
         state.hasUnsavedChanges = false; 
-        state.isLoadingContent = false;
+        state.isLoadingContent = false; // Reset loading initially
         state.chatMessages = []; // Clear chat history
         state.chatError = null;
         state.isChatLoading = false;
@@ -282,9 +302,15 @@ export const useAppStore = create(
         state.isLoadingComments = false;
         state.focusedCommentId = null; 
         state.focusedMarkId = null;
+        state.isCommentSidebarOpen = false; // Close comment sidebar
+        state.submitStatus = null; // Clear any previous submit status
+
         // Collapse sidebar ONLY if selecting a NEW item
         if (item) {
+          // Don't collapse if already collapsed - allows re-clicking to fetch
+          if (!state.isSidebarCollapsed) {
           state.isSidebarCollapsed = true;
+          }
         } else {
            // If clearing selection, expand sidebar
            state.isSidebarCollapsed = false;
@@ -292,72 +318,125 @@ export const useAppStore = create(
 
         // Trigger content fetch if an item is selected
         if (item) {
-          get().fetchLegislationContent(item.href);
+            // Call fetchLegislationContent with the correct URL (item.href)
+            get().fetchLegislationContent(item.href); 
         }
       });
     },
 
-    fetchLegislationContent: async (url: string) => {
-      if (!url) return; 
+    fetchLegislationContent: async (urlToFetch: string) => {
+      if (!urlToFetch) {
+        console.warn("[Store] fetchLegislationContent called with no URL.");
+        set({ selectedLegislationContent: null, isLoadingContent: false, fullDocumentHtml: null, hasUnsavedChanges: false, comments: [] });
+        return;
+      }
 
+      // Retrieve the identifier from the currently selected item for fetching comments later
+      const identifier = get().selectedLegislation?.identifier;
+
+      // Only set loading if not already loading (prevent flickering)
+      if (!get().isLoadingContent) {
+          set({ isLoadingContent: true });
+      }
+      // Reset specific states before fetching new content
       set((state) => {
-          if (!state.isLoadingContent) state.isLoadingContent = true;
          state.errorContent = null;
-         state.selectedLegislationContent = null; 
-         state.originalLegislationContent = null; 
+         state.selectedLegislationContent = null; // Clear old structured content
+         state.fullDocumentHtml = null; // Explicitly clear combined HTML here too
          state.hasUnsavedChanges = false;
+         state.comments = []; // Clear comments for the new item
+         state.isCommentSidebarOpen = false; // Close comment sidebar
+         state.focusedMarkId = null;
+         state.focusedCommentId = null;
+         state.submitStatus = null; // Clear submit status
       });
 
+      console.log(`[Store] Fetching content for URL: ${urlToFetch}`);
+
       try {
-        const apiUrl = `/api/legislation/content?url=${encodeURIComponent(url)}`;
+        // Use the correct API endpoint and pass the URL as a query parameter
+        const apiUrl = `/api/legislation/content?url=${encodeURIComponent(urlToFetch)}`;
         const response = await fetch(apiUrl);
-
-        if (!response.ok) {
-             const errorBody = await response.text(); 
-             console.error(`[AppStore] HTTP error fetching content! Status: ${response.status}, URL: ${apiUrl}, Body: ${errorBody}`);
-             throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const data: LegislationContent = await response.json(); 
-        console.log("[AppStore] Content received:", data);
-
-         if (!data || typeof data.introHtml === 'undefined' || !data.toc || !data.sectionsHtml) {
-            console.error("[AppStore] Invalid content structure received:", data);
-            throw new Error("Invalid content structure received from API.");
-         }
-
-        get().setOriginalContent(data);
         
-        set((state) => {
-          state.selectedLegislationContent = data;
-          state.isLoadingContent = false; // Set loading false on success
-          // hasUnsavedChanges is reset by setOriginalContent
+        if (!response.ok) {
+          // Try to get error message from JSON body first
+          let errorMsg = `HTTP error! status: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+          } catch (jsonError) {
+            // If parsing JSON fails, try to get text body
+            try {
+                 const textBody = await response.text();
+                 errorMsg += ` - ${textBody.substring(0, 100)}`; // Include part of text body
+            } catch {} // Ignore error reading text body
+          }
+          console.error(`[API Error] Failed fetch: ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
+        
+        // We expect JSON now from the correct endpoint
+        const data: LegislationContent = await response.json(); 
+        console.log('[Store] Content fetched:', data);
+
+        // Combine intro and sections into fullDocumentHtml
+        let combinedHtml = data.introHtml || ''; 
+        if (data.toc && data.sectionsHtml) {
+            data.toc.forEach(item => {
+                // Only include actual content sections, not placeholder headings
+                if (!item.fullHref.includes('#heading-') && data.sectionsHtml[item.fullHref]) {
+                    const sectionId = generateSafeId(item.title || item.fullHref); 
+                    // Add section title heading BEFORE the content
+                    combinedHtml += `<h2 data-section-href="${item.fullHref}" id="${sectionId}">${item.title}</h2>\\n`;
+                    combinedHtml += data.sectionsHtml[item.fullHref] + '\\n'; // Add content
+                } else if (item.fullHref.includes('#heading-')) {
+                     // Add non-linked headings for structure
+                     const headingId = generateSafeId(item.title || `heading-${item.fullHref}`);
+                     // Adjust heading level based on TOC level? (e.g., level 0 -> h2, level 1 -> h3)
+                     const headingLevel = Math.min(6, item.level + 2); // Clamp between h2 and h6
+                     combinedHtml += `<h${headingLevel} data-toc-heading="true" id="${headingId}" style="margin-left: ${item.level * 1.5}rem;">${item.title}</h${headingLevel}>\\n`;
+                }
+            });
+        }
+
+        set({
+          selectedLegislationContent: data, // Store the raw structured content
+          isLoadingContent: false,
+          fullDocumentHtml: combinedHtml,   // Set the combined HTML
+          hasUnsavedChanges: false, // Reset unsaved changes flag
         });
 
-      } catch (e) {
-         const error = e instanceof Error ? e : new Error(String(e));
-        console.error("[AppStore] Failed to fetch legislation content:", error);
-        set((state) => {
-          state.errorContent = error.message;
-          state.isLoadingContent = false; // Set loading false on error
-          state.selectedLegislation = null; 
-          state.selectedLegislationContent = null;
-          state.originalLegislationContent = null;
-          state.hasUnsavedChanges = false;
+        // Fetch comments associated with this legislation *after* content is set
+        if (identifier) {
+          get().fetchComments(identifier);
+        } else {
+          console.warn("[Store] Could not fetch comments after content load: identifier was missing.");
+        }
+
+      } catch (error: any) { // Catch block handles fetch errors AND JSON parsing errors
+        console.error('[Store] Error fetching or processing content:', error);
+        set({ 
+            errorContent: error.message || "Failed to load content", 
+            isLoadingContent: false, 
+            selectedLegislationContent: null, 
+            fullDocumentHtml: null 
         });
       }
     },
     
      resetContent: () => {
-        // Reset content to original
-        set((state) => {
-            if (state.originalLegislationContent) {
-                state.selectedLegislationContent = JSON.parse(JSON.stringify(state.originalLegislationContent));
-            }
-            state.isLoadingContent = false;
-            state.errorContent = null;
-            state.hasUnsavedChanges = false; // Reset flag
-        });
+        const currentSelection = get().selectedLegislation;
+        if (currentSelection) {
+            console.log("[Store] Resetting content for:", currentSelection.identifier);
+            // Refetch original content using the HREF
+            get().fetchLegislationContent(currentSelection.href); 
+            // Fetching content already resets these flags:
+            // set({ hasUnsavedChanges: false, submitStatus: null, isSubmitting: false }); 
+        } else {
+             console.warn("[Store] Cannot reset content, no legislation selected.");
+        }
     },
+
     // --- NEW: Chat Actions ---
     sendChatMessage: async (messageText: string) => {
       if (!messageText.trim() || get().isChatLoading) return;
@@ -437,24 +516,34 @@ export const useAppStore = create(
     // --- END NEW ---
     // --- NEW: Editor Update Actions ---
     updateIntroHtml: (newHtml: string) => {
-      set((state) => {
-        if (state.selectedLegislationContent) {
-          state.selectedLegislationContent.introHtml = newHtml;
-          state.hasUnsavedChanges = true; // Mark changes
-        }
-      });
+      // This should likely not be used directly anymore.
+      // Changes should be managed via setFullDocumentHtml.
+      console.warn("updateIntroHtml called - this might be deprecated. Use setFullDocumentHtml.");
+      // set((state) => {
+      //   if (state.selectedLegislationContent) {
+      //     // state.selectedLegislationContent.introHtml = newHtml;
+      //     // state.hasUnsavedChanges = true; // Mark changes
+      //   }
+      // });
     },
     updateSectionHtml: (href: string, newHtml: string) => {
-      set((state) => {
-        if (state.selectedLegislationContent?.sectionsHtml) { // Corrected property name
-          state.selectedLegislationContent.sectionsHtml[href] = newHtml;
-          state.hasUnsavedChanges = true; // Mark changes
-        }
-      });
+      // This should likely not be used directly anymore.
+      console.warn("updateSectionHtml called - this might be deprecated. Use setFullDocumentHtml.");
+      // set((state) => {
+      //   if (state.selectedLegislationContent?.sectionsHtml) {
+      //     // state.selectedLegislationContent.sectionsHtml[href] = newHtml;
+      //     // state.hasUnsavedChanges = true; // Mark changes
+      //   }
+      // });
     },
     // --- END NEW ---
     // --- NEW: Comment Actions ---
     fetchComments: async (legislationIdentifier: string) => {
+      if (!legislationIdentifier) {
+        console.warn("fetchComments called with no identifier.");
+        set({ comments: [], isLoadingComments: false });
+        return;
+      }
       if (get().isLoadingComments) return;
 
       set(state => {
@@ -462,6 +551,7 @@ export const useAppStore = create(
         state.commentsError = null;
       });
 
+      console.log(`[Store] Fetching comments for legislation ID: ${legislationIdentifier}`);
       try {
         const supabase = createClient();
         // Fetch comments matching the identifier
@@ -478,7 +568,8 @@ export const useAppStore = create(
           ...c, // Spread existing fields
           // Ensure required fields exist and potentially transform types
           id: String(c.id), // Ensure ID is string
-          legislation_identifier: String(c.legislation_id), // Map API field to store field if different (using identifier here)
+          // legislation_identifier: String(c.legislation_id), // API returns legislation_id, keep it? 
+          legislation_identifier: String(c.legislation_id || legislationIdentifier), // Use provided identifier as fallback
           mark_id: String(c.mark_id),
           comment_text: String(c.comment_text),
           created_at: String(c.created_at),
@@ -488,6 +579,7 @@ export const useAppStore = create(
           // Ensure all fields expected by the Comment type are present
         })).filter(c => c.id && c.mark_id && c.comment_text && c.created_at && c.user_id);
 
+        console.log(`[Store] Fetched ${validComments.length} comments.`);
         set(state => {
           state.comments = validComments;
           state.isLoadingComments = false;
@@ -505,25 +597,28 @@ export const useAppStore = create(
 
     addComment: (newComment: Comment) => {
       set((state) => {
+        // Avoid duplicates if submit somehow triggers multiple times
+        if (!state.comments.some(c => c.id === newComment.id)) {
         state.comments.push(newComment);
+        }
       });
     },
     setFocusedCommentId: (commentId: string | null) => {
       set((state) => {
         state.focusedCommentId = commentId;
         // Optionally clear mark focus when comment focus changes
-        if (commentId !== null) {
-            state.focusedMarkId = null; 
-        }
+        // if (commentId !== null) {
+        //     state.focusedMarkId = null; 
+        // }
       });
     },
     setFocusedMarkId: (markId: string | null) => { // NEW action
       set((state) => {
         state.focusedMarkId = markId;
         // Optionally clear comment focus when mark focus changes
-        if (markId !== null) {
-            state.focusedCommentId = null; 
-        }
+        // if (markId !== null) {
+        //     state.focusedCommentId = null; 
+        // }
       });
     },
     // --- END NEW ---
@@ -556,18 +651,22 @@ export const useAppStore = create(
       const supabase = createClient(); // Create client instance for this action
       const {
         selectedLegislation,
-        selectedLegislationContent,
-        originalLegislationContent,
+        fullDocumentHtml, // Use the combined HTML
         hasUnsavedChanges
       } = get();
 
       if (!hasUnsavedChanges) {
           console.log("No unsaved changes to submit.");
+          set({ submitStatus: { type: 'success', message: 'No changes detected.'}, isSubmitting: false });
+          // Use setTimeout to clear the status message after a few seconds
+          setTimeout(() => set({ submitStatus: null }), 3000);
           return { success: true, error: "No changes to submit." };
       }
 
-      if (!selectedLegislation || !selectedLegislationContent || !originalLegislationContent) {
-        console.error("Submit Error: Missing required data.", { selectedLegislation, selectedLegislationContent, originalLegislationContent });
+      if (!selectedLegislation || fullDocumentHtml === null) {
+        console.error("Submit Error: Missing required data.", { selectedLegislation, fullDocumentHtml });
+        set({ submitStatus: { type: 'error', message: 'Missing legislation data or content.'}, isSubmitting: false });
+        setTimeout(() => set({ submitStatus: null }), 5000);
         return { success: false, error: "Cannot submit: Missing current or original legislation data." };
       }
 
@@ -575,94 +674,104 @@ export const useAppStore = create(
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
           console.error("Submit changes failed: User not authenticated.", userError);
-           return { success: false, error: `User not authenticated: ${userError?.message || 'Please log in.'}` };
+          const message = `User not authenticated: ${userError?.message || 'Please log in.'}`;
+          set({ submitStatus: { type: 'error', message }, isSubmitting: false });
+          setTimeout(() => set({ submitStatus: null }), 5000);
+          return { success: false, error: message };
       }
       const userId = user.id;
 
-      // Define the structure of the data to insert, excluding DB-generated fields
-      const changesToSubmit: Omit<ProposedChange, 'id' | 'created_at'>[] = [];
+      // Prepare the payload
+      // The backend API at /api/legislation/:identifier/submit needs to handle this structure
+      const payload = {
+        identifier: selectedLegislation.identifier,
+        content: fullDocumentHtml, // Send the full combined HTML
+        // title: selectedLegislation.title // Optional: send title for context
+      };
 
-      // Compare intro HTML
-      if (selectedLegislationContent.introHtml !== originalLegislationContent.introHtml) {
-        changesToSubmit.push({
-          user_id: userId,
-          legislation_id: selectedLegislation.href,
-          legislation_title: selectedLegislation.title,
-          section_key: 'intro',
-          section_title: 'Introduction',
-          original_html: originalLegislationContent.introHtml,
-          proposed_html: selectedLegislationContent.introHtml,
-          status: 'pending',
-          context_before: null, // Placeholder for context
-          context_after: null,  // Placeholder for context
-        });
-      }
-
-      // Compare sections HTML
-      const currentSections = selectedLegislationContent.sectionsHtml || {};
-      const originalSections = originalLegislationContent.sectionsHtml || {};
-      const tocMap = new Map(selectedLegislationContent.toc.map(item => [item.fullHref, item]));
-      const allSectionKeys = new Set([...Object.keys(currentSections), ...Object.keys(originalSections)]);
-
-      allSectionKeys.forEach(key => {
-           const currentHtml = currentSections[key];
-           const originalHtml = originalSections[key];
-
-           if (currentHtml !== originalHtml) {
-               const tocItem = tocMap.get(key);
-               const sectionTitle = tocItem?.title || `Section (${key.split('#')[1] || key})`;
-               // TODO: Implement logic to get context_before and context_after if needed
-
-               changesToSubmit.push({
-                   user_id: userId,
-                   legislation_id: selectedLegislation.href,
-                   legislation_title: selectedLegislation.title,
-                   section_key: key,
-                   section_title: sectionTitle,
-                   original_html: originalHtml ?? null,
-                   proposed_html: currentHtml ?? null,
-                   status: 'pending',
-                   context_before: null, // Placeholder
-                   context_after: null,  // Placeholder
-               });
-           }
-      });
-
-      if (changesToSubmit.length === 0) {
-          // This case might occur if hasUnsavedChanges was true but the content was reverted manually
-          console.warn("Submit changes called, but no actual differences found.");
-          set(state => { state.hasUnsavedChanges = false }); // Correct the flag
-          return { success: true, error: "No actual changes detected to submit." }; 
-      }
-
+      set({ isSubmitting: true, submitStatus: null }); // Set submitting flag
       try {
-        console.log(`[AppStore] Submitting ${changesToSubmit.length} changes for user ${userId}.`);
-        const { error } = await supabase
-          .from('proposed_changes')
-          .insert(changesToSubmit);
+        console.log(`[AppStore] Submitting changes for ${payload.identifier} by user ${userId}.`);
 
-        if (error) {
-          console.error("Error submitting changes to Supabase:", error);
-          throw error;
+        const response = await fetch(`/api/legislation/${payload.identifier}/submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error("Error submitting changes via API:", errorData);
+          throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
         }
 
-        // Successfully submitted: Update original content to reflect submitted changes & reset flag
-        get().setOriginalContent(selectedLegislationContent); // Use the internal action
-        // The setOriginalContent action already resets hasUnsavedChanges
+        const result = await response.json();
 
-        console.log("Changes submitted successfully.");
+        // Successfully submitted: Reset flag
+        set(state => { 
+            state.hasUnsavedChanges = false;
+            state.isSubmitting = false;
+            state.submitStatus = { type: 'success', message: result.message || 'Changes submitted successfully!' };
+        });
+        // Clear status after delay
+        setTimeout(() => set({ submitStatus: null }), 3000);
+
+        console.log("Changes submitted successfully via API.");
         return { success: true };
 
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unknown error occurred during submission.";
         console.error("Submission failed:", message);
-        // Don't reset hasUnsavedChanges on failure, allow retry
+        set(state => {
+            state.isSubmitting = false; // Ensure submitting is false on error
+            state.submitStatus = { type: 'error', message };
+        });
+         // Clear status after delay
+        setTimeout(() => set({ submitStatus: null }), 5000);
         return { success: false, error: message };
       }
     },
     // --- End add back --- 
+
+    // --- Add state for comment sidebar visibility ---
+    isCommentSidebarOpen: false,
+
+    // --- Add action for combined content ---
+    setFullDocumentHtml: (html) => {
+        // Compare with the *originally loaded* combined HTML if possible,
+        // otherwise, just compare with the previous state.
+        // This requires storing the original combined HTML somewhere, maybe
+        // alongside originalLegislationContent, or deriving it when needed.
+        // For now, a simple check against the *previous* state:
+        const previousHtml = get().fullDocumentHtml;
+        set((state) => {
+            state.fullDocumentHtml = html;
+            // Only set unsaved if the HTML actually changed from the last update
+            if (html !== previousHtml) {
+                console.log("[Store] Content changed, marking as unsaved.");
+                state.hasUnsavedChanges = true;
+            } else {
+                console.log("[Store] Content update received, but no change detected.");
+            }
+        });
+    },
+
+    // --- Add action for comment sidebar ---
+    toggleCommentSidebar: () => {
+      set((state) => ({ isCommentSidebarOpen: !state.isCommentSidebarOpen }));
+    },
   }))
 );
+
+// --- Helper function used in fetchLegislationContent and resetContent ---
+const generateSafeId = (input: string): string => {
+    return input
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, ' ') // Remove invalid chars
+        .trim()
+        .replace(/\s+/g, '-') // Replace spaces with hyphens
+        .replace(/-+/g, '-'); // Replace multiple hyphens with single
+};
 
 // --- Selectors (No changes needed here, but kept for reference) ---
 
@@ -677,11 +786,15 @@ export const useFilteredLegislationList = () => {
   // Memoize the filtering logic
   const filteredList = useMemo(() => {
     const lowerCaseSearchTerm = searchTerm.toLowerCase();
+    if (!allLegislationList) return [];
     
     // Apply basic filtering (type and search term)
     let list = allLegislationList.filter(item => {
       const typeMatch = selectedTypes.includes(item.type);
       if (!typeMatch) return false;
+
+      const amendmentMatch = showAmendments || !(item.isAmendment ?? item.title.toLowerCase().includes('amendment'));
+        if (!amendmentMatch) return false;
 
       if (!searchTerm) return true; 
 
@@ -689,12 +802,6 @@ export const useFilteredLegislationList = () => {
       return searchableText.includes(lowerCaseSearchTerm);
     });
 
-    // Apply amendment filter if necessary
-    if (!showAmendments) {
-      list = list.filter(item => 
-        !item.title.toLowerCase().includes('amendment')
-      );
-    }
     return list;
   }, [allLegislationList, searchTerm, selectedTypes, showAmendments]); // Dependencies for memoization
 
@@ -713,26 +820,33 @@ export const useAvailableTypes = () => useAppStore((state) => state.availableTyp
 // Selector to get the currently selected types
 export const useSelectedTypes = () => useAppStore((state) => state.selectedTypes);
 
-// --- Add back selector for hasUnsavedChanges flag ---
+// Selector for hasUnsavedChanges flag
 export const useHasUnsavedChanges = () => useAppStore((state) => state.hasUnsavedChanges);
-// --- End add back ---
 
-// --- NEW: Hooks for comments ---
+// Hooks for comments
 export const useComments = () => useAppStore((state) => state.comments);
 export const useIsLoadingComments = () => useAppStore((state) => state.isLoadingComments);
 export const useCommentsError = () => useAppStore((state) => state.commentsError);
 export const useFocusedCommentId = () => useAppStore((state) => state.focusedCommentId); // Hook for focused comment
 export const useFocusedMarkId = () => useAppStore((state) => state.focusedMarkId); // Hook for focused mark
-// --- END NEW ---
 
-// --- NEW: Action Hook for Comments ---
+// Action Hook for Comments
 export const useCommentActions = () => useAppStore((state) => ({
   fetchComments: state.fetchComments,
   addComment: state.addComment,
   setFocusedCommentId: state.setFocusedCommentId,
   setFocusedMarkId: state.setFocusedMarkId,
 }));
-// --- END NEW ---
 
-// Add selectors for new sidebar state
+// Selectors for sidebar state
 export const useIsSidebarCollapsed = () => useAppStore((state) => state.isSidebarCollapsed);
+
+// Selector for comment sidebar visibility
+export const useIsCommentSidebarOpen = () => useAppStore((state) => state.isCommentSidebarOpen);
+
+// Selector for submission status
+export const useSubmitStatus = () => useAppStore((state) => state.submitStatus);
+export const useIsSubmitting = () => useAppStore((state) => state.isSubmitting);
+
+// Remove duplicate type export line
+// export type { LegislationItem, TocItem, LegislationContent, ChatMessage, ChatMessagePart, Comment };

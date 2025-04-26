@@ -11,6 +11,7 @@ import Paragraph from '@tiptap/extension-paragraph';
 import Heading from '@tiptap/extension-heading';
 import { Mark, Command } from '@tiptap/core'; // Import more types and Command
 import { useAppStore } from '@/lib/store/useAppStore'; // Import store for actions
+import { Editor } from '@tiptap/react'; // Ensure Editor type is imported
 // --- End imports ---
 
 // Basic styling for the editor - adjust as needed
@@ -241,13 +242,17 @@ interface LegislationEditorProps {
   onChange?: (newContent: string) => void; // Add onChange prop
   // Add the callback prop for comment initiation
   onAddCommentClick?: (markId: string) => void;
+  onEditorReady?: (editor: Editor) => void; // Callback to pass editor instance up
+  showToolbar?: boolean; // New prop to control internal toolbar visibility
 }
 
 const LegislationEditor: React.FC<LegislationEditorProps> = ({ 
     content, 
     editable = true, 
     onChange, 
-    onAddCommentClick // Destructure the prop
+    onAddCommentClick,
+    onEditorReady, // Destructure the new prop
+    showToolbar = true, // Default to true if not provided
 }) => { // Default editable to true
   const editor = useEditor({
     extensions: [
@@ -284,6 +289,12 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
         onChange(editor.getHTML()); 
       }
     },
+    // --- Call onEditorReady when the editor is created ---
+    onCreate: ({ editor }) => {
+      if (onEditorReady) {
+        onEditorReady(editor);
+      }
+    },
     // Add this line to fix SSR hydration issue
     immediatelyRender: false, 
   });
@@ -300,11 +311,11 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
   }
 
   return (
-    <div className="tiptap-editor-wrapper border border-gray-300 dark:border-gray-600 rounded">
-      {/* Pass the callback down to the toolbar */}
-      {editable && onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={onAddCommentClick} />} 
+    <div className="tiptap-editor-wrapper">
+      {/* Conditionally render the toolbar based on the prop */}
+      {editable && showToolbar && onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={onAddCommentClick} />}
       {/* Conditionally render toolbar *without* comment button if callback not provided */}
-      {editable && !onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={() => console.warn("onAddCommentClick not provided to LegislationEditor")} />} 
+      {editable && showToolbar && !onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={() => console.warn("onAddCommentClick not provided to LegislationEditor")} />}
       <EditorContent editor={editor} />
     </div>
   );

@@ -15,7 +15,7 @@ import UserAuth from './UserAuth';
 import { createClient } from '@/lib/supabaseClient'; 
 // Correct import for User type and other auth types
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'; 
-import { Info, Filter, PanelLeftClose, PanelRightClose, ListTree } from 'lucide-react'; // Icon for the prompt and Filter button, and new icons for toggle and ListTree
+import { Info, Filter, PanelLeftClose, PanelRightClose, ListTree, MessageSquare, Trash2, Send, Loader2 } from 'lucide-react'; // Icon for the prompt and Filter button, and new icons for toggle and ListTree
 import { Button } from '@/components/ui/button'; // Import Button
 import {
   DropdownMenu,
@@ -25,7 +25,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu" // Import Dropdown components
-import TableOfContents from './TableOfContents'; // Import TOC component
+import TableOfContents from './TableOfContents';
 
 // --- NEW: Props for LeftSidebar --- 
 interface LeftSidebarProps {
@@ -39,7 +39,6 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
   // Select necessary state and actions directly from the store
   const isLoadingList = useAppStore((state) => state.isLoadingList);
   const selectedLegislation = useAppStore((state) => state.selectedLegislation);
-  const selectedLegislationContent = useAppStore((state) => state.selectedLegislationContent);
   const searchTerm = useAppStore((state) => state.searchTerm);
   const error = useAppStore((state) => state.error);
   // Access top-level actions
@@ -130,6 +129,24 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
 
   const isLoggedIn = !authLoading && !!user;
 
+  // --- Get state and actions for relocated buttons ---
+  const hasUnsavedChanges = useAppStore((state) => state.hasUnsavedChanges);
+  const isSubmitting = useAppStore((state) => state.isSubmitting);
+  const submitChangesForReview = useAppStore((state) => state.submitChangesForReview);
+  const resetContent = useAppStore((state) => state.resetContent);
+  const isCommentSidebarOpen = useAppStore((state) => state.isCommentSidebarOpen);
+  const toggleCommentSidebar = useAppStore((state) => state.toggleCommentSidebar);
+  const comments = useAppStore((state) => state.comments);
+  // -------------------------------------------------
+
+  const handleDiscard = () => {
+    if (confirm("Are you sure you want to discard your changes? This cannot be undone.")) {
+        console.log("Discarding changes...");
+        resetContent();
+        // Optionally show a temporary success message here or rely on store's submitStatus
+    }
+  };
+
   return (
     <div className={`flex flex-col h-full bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-16' : 'w-80'}`}>
       
@@ -157,7 +174,24 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
                  <ListTree className="h-5 w-5" />
                </Button>
              )}
-             {/* Optionally add other icons/buttons here for the collapsed state */}
+             {/* --- Collapsed: Comments Toggle --- */}
+             {selectedLegislation && (
+                <Button
+                  variant={isCommentSidebarOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  onClick={toggleCommentSidebar}
+                  title={isCommentSidebarOpen ? "Hide Comments" : "Show Comments"}
+                  className="relative" // For badge positioning
+                >
+                  <MessageSquare className="h-5 w-5" />
+                  {/* Comment Count Badge - Adjusted for icon button */}
+                   {Array.isArray(comments) && comments.length > 0 && (
+                    <span className="absolute top-0 right-0 block h-4 w-4 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
+                      {comments.length}
+                    </span>
+                  )}
+                </Button>
+              )}
           </div>
         ) : (
           // --- Expanded View: Show Search, Filters, List --- 
@@ -215,6 +249,44 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
                 {/* ------------------------ */} 
               </div>
             </div>
+
+            {/* --- Document Action Buttons (Expanded View Only) --- */}
+            {selectedLegislation && !isSidebarCollapsed && (
+                <div className="p-2 px-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center space-x-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={toggleCommentSidebar}
+                      title={isCommentSidebarOpen ? "Hide Comments" : "Show Comments"}
+                    >
+                      <MessageSquare className="h-4 w-4 mr-1.5" />
+                      {isCommentSidebarOpen ? "Hide" : "Show"} Comments
+                      {/* Show comment count */}
+                      {Array.isArray(comments) && comments.length > 0 && <span className="ml-1.5 bg-gray-200 dark:bg-gray-600 px-1.5 py-0.5 rounded text-xs">{comments.length}</span>}
+                    </Button>
+
+                    <div className="flex items-center space-x-2">
+                        {hasUnsavedChanges && (
+                            <Button variant="outline" onClick={handleDiscard} disabled={isSubmitting} size="sm" title="Discard Changes">
+                                <Trash2 className="h-4 w-4" />
+                            </Button>
+                        )}
+                        <Button
+                            onClick={submitChangesForReview}
+                            disabled={!hasUnsavedChanges || isSubmitting}
+                            size="sm"
+                            className={hasUnsavedChanges ? "bg-green-600 hover:bg-green-700" : ""}
+                            title={hasUnsavedChanges ? "Submit Changes for Review" : "No changes to submit"}
+                        >
+                            {isSubmitting ? (
+                                <Loader2 className="animate-spin h-4 w-4" />
+                            ) : (
+                                <Send className="h-4 w-4" />
+                            )}
+                        </Button>
+                    </div>
+                </div>
+            )}
 
             {/* List Area */}
             <div className="flex-grow overflow-y-auto">

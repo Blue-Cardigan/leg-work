@@ -12,7 +12,8 @@ import {
     CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { AlertCircle, MessageSquare } from 'lucide-react';
+import { AlertCircle, MessageSquare, X } from 'lucide-react';
+import { Button } from "@/components/ui/button";
 
 interface CommentDisplaySidebarProps {
   onCardClick: (markId: string) => void;
@@ -25,6 +26,7 @@ const CommentDisplaySidebar: React.FC<CommentDisplaySidebarProps> = ({ onCardCli
   const commentsError = useAppStore((state) => state.commentsError);
   const focusedMarkId = useAppStore((state) => state.focusedMarkId);
   const setFocusedMarkId = useAppStore((state) => state.setFocusedMarkId);
+  const toggleCommentSidebar = useAppStore((state) => state.toggleCommentSidebar);
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString([], {
@@ -41,9 +43,18 @@ const CommentDisplaySidebar: React.FC<CommentDisplaySidebarProps> = ({ onCardCli
   return (
     <div className={`w-80 bg-gray-50 dark:bg-gray-900 shadow-lg z-30 border-l border-gray-200 dark:border-gray-700 flex flex-col ${className || ''}`}>
       <div className="p-4 border-b border-gray-200 dark:border-gray-600">
-        <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200 flex items-center">
-          <MessageSquare className="mr-2 h-5 w-5"/> Comments ({Array.isArray(comments) ? comments.length : 0})
-        </h3>
+        <div className="flex justify-between items-center mb-4 pb-2">
+          <h3 className="text-lg font-semibold text-gray-800 dark:text-gray-200">Comments ({Array.isArray(comments) ? comments.length : 0})</h3>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={toggleCommentSidebar}
+            title="Close Comments"
+            className="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          >
+            <X className="h-5 w-5" />
+          </Button>
+        </div>
       </div>
       <ScrollArea className="flex-grow p-4">
         {isLoadingComments && (
