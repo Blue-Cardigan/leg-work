@@ -5,10 +5,12 @@ import { useAppStore, TocItem, LegislationContent, Comment } from '@/lib/store/u
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal, Loader2 } from "lucide-react"; // Removed MessageSquare, added Loader2
+import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle } from "lucide-react"; // Removed MessageSquare, added Loader2, Eye, Pencil, GitCompareArrows, X
 import { useInView } from 'react-intersection-observer'; // Import useInView
 import CommentInputSidebar from './CommentInputSidebar';
 import { Editor } from '@tiptap/core';
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
+import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -75,6 +77,23 @@ interface MainContentProps {
 }
 // --- END NEW ---
 
+// --- ProposedChange Type (Mirrored from Dashboard) ---
+interface ProposedChange {
+    id: number;
+    created_at: string;
+    user_id: string;
+    legislation_id: string;
+    legislation_title: string;
+    section_key: string; // This might be 'fullDocument' for our current setup
+    section_title: string; // Might be the legislation title
+    original_html: string | null; // Original HTML of the *entire* document at time of change? Needs clarification.
+    proposed_html: string | null; // Proposed HTML for the *entire* document
+    status: string;
+    context_before: string | null; // Less relevant for full document changes?
+    context_after: string | null; // Less relevant for full document changes?
+}
+// --- END ProposedChange Type ---
+
 export default function MainContent({ }: MainContentProps) { // Props might be empty now
   const {
     selectedLegislation,
@@ -94,7 +113,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   // State for managing the comment *input* sidebar specifically
   const [showCommentInputFor, setShowCommentInputFor] = useState<string | null>(null);
   // const [activeSectionKeyForComment, setActiveSectionKeyForComment] = useState<string | null>(null); // Section key may be less relevant now
-
+  const supabase = createClient(); // Initialize Supabase client
   const mainContentRef = useRef<HTMLDivElement>(null); // Ref for the main scrollable area
   const editorRef = useRef<any>(null); // Ref to potentially access editor instance if needed
 
@@ -222,6 +241,117 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       }
   };
 
+  // --- NEW: View Mode State ---
+  type ViewMode = 'view' | 'changes' | 'edit';
+  const [viewMode, setViewMode] = useState<ViewMode>('view');
+  const [explanatoryNoteHtml, setExplanatoryNoteHtml] = useState<string | null>(null);
+  const [isExplanatoryNoteVisible, setIsExplanatoryNoteVisible] = useState<boolean>(true);
+  // State to hold changes for diff view (will fetch later)
+  const [allPendingChanges, setAllPendingChanges] = useState<ProposedChange[]>([]);
+  const [isLoadingChanges, setIsLoadingChanges] = useState<boolean>(false);
+  const [changesError, setChangesError] = useState<string | null>(null);
+  const [baseHtmlForDiff, setBaseHtmlForDiff] = useState<string | null>(null); // New state for base HTML
+  // --- END NEW ---
+
+  // --- NEW: Extract Explanatory Note ---
+  useEffect(() => {
+    if (fullDocumentHtml && viewMode === 'view') {
+        // Attempt to extract explanatory note (adjust selector as needed)
+        // Common IDs used in legislation.gov.uk are 'note' or elements within a specific structure.
+        // Let's try a common pattern first.
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = fullDocumentHtml;
+        // Look for a div with id="note" or the specific structure from the example
+        const noteElement = tempDiv.querySelector('#note, .LegContentsItem span.LegContentsNo a[href$="/note"]')?.closest('.LegContentsEntry') || tempDiv.querySelector('div#explanatory-note'); // Added fallback
+
+        if (noteElement) {
+            console.log("[MainContent] Explanatory Note element found.");
+            setExplanatoryNoteHtml(noteElement.outerHTML);
+            setIsExplanatoryNoteVisible(true); // Show it when new content loads
+            // Optional: Modify the main HTML *carefully* to remove the note to avoid duplication.
+            // This is complex and risky. A better approach might be to hide it via CSS in the editor's view mode.
+            // For now, we'll just display it separately.
+        } else {
+            console.log("[MainContent] Explanatory Note element not found with selectors.");
+            setExplanatoryNoteHtml(null);
+        }
+    } else {
+        // Clear note if not in view mode or no HTML
+        setExplanatoryNoteHtml(null);
+    }
+  }, [fullDocumentHtml, viewMode]);
+  // --- END NEW ---
+
+  // --- Fetch ALL Pending Changes ---
+  useEffect(() => {
+    const fetchAllChanges = async () => {
+        if (!selectedLegislation?.identifier) return;
+
+        console.log(`[MainContent] Fetching all pending changes for ${selectedLegislation.identifier}`);
+        setIsLoadingChanges(true);
+        setChangesError(null);
+        setAllPendingChanges([]);
+        setBaseHtmlForDiff(null); // Reset base HTML
+
+        try {
+             // **IMPORTANT:** Fetching *all* changes usually requires specific permissions.
+             // The standard RLS allows users to see only their own.
+             // We likely need a Supabase RPC function (`get_all_pending_changes`)
+             // defined with `SECURITY DEFINER` or adjust RLS for specific roles.
+             // Using RPC is generally safer.
+
+            // Placeholder for RPC call:
+            const { data, error } = await supabase.rpc('get_all_pending_changes_for_legislation', {
+                p_legislation_id: selectedLegislation.identifier
+            });
+
+            // Fallback/Alternative (if RLS allows or for testing):
+            // const { data, error } = await supabase
+            //     .from('proposed_changes')
+            //     .select('*')
+            //     .eq('legislation_id', selectedLegislation.identifier)
+            //     .eq('status', 'pending')
+            //     .order('created_at', { ascending: true }); // Oldest first might be better for applying diffs
+
+            if (error) {
+                console.error("[MainContent] Error fetching all pending changes:", error);
+                throw error;
+            }
+
+            const fetchedChanges = (data as ProposedChange[]) || [];
+            console.log(`[MainContent] Fetched ${fetchedChanges.length} pending changes.`);
+            setAllPendingChanges(fetchedChanges);
+
+            // Determine the base HTML for comparison
+            if (fetchedChanges.length > 0) {
+                // The original HTML *before* the very first pending change
+                setBaseHtmlForDiff(fetchedChanges[0].original_html);
+            } else {
+                 // If no pending changes, the base is the current document for diffing purposes (no diffs)
+                 setBaseHtmlForDiff(fullDocumentHtml);
+            }
+
+        } catch (err: any) {
+            console.error("[MainContent] Failed to fetch all pending changes:", err);
+            setChangesError(err.message || "Failed to load pending changes.");
+            setAllPendingChanges([]);
+            setBaseHtmlForDiff(null);
+        } finally {
+            setIsLoadingChanges(false);
+        }
+    };
+
+    if (selectedLegislation?.identifier && (viewMode === 'changes' || viewMode === 'edit')) {
+        fetchAllChanges();
+    } else {
+        setAllPendingChanges([]);
+        setChangesError(null);
+        setBaseHtmlForDiff(null); // Clear base HTML if not in relevant modes
+    }
+    // Add supabase to dependencies
+  }, [selectedLegislation, viewMode, supabase, fullDocumentHtml]);
+  // --- END Fetch ---
+
   // --- Loading State ---
   if (isLoadingContent) {
     return (
@@ -251,9 +381,26 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     <div className="flex-grow flex flex-col bg-white dark:bg-gray-900 relative h-full">
 
         {/* Header Area (Non-Scrolling) */}
-        <div className="p-6 pb-0 flex-shrink-0"> {/* Padding moved here */}
+        <div className="p-6 pb-2 flex-shrink-0"> {/* Adjusted padding */}
             {/* Document Title */}
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-3">{selectedLegislation.title}</h1>
+
+            {/* --- NEW: View Mode Toggle --- */}
+            <div className="mb-3 flex justify-between items-center">
+                 <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { if (value) setViewMode(value as ViewMode) }} size="sm">
+                    <ToggleGroupItem value="view" aria-label="View mode">
+                        <Eye className="h-4 w-4 mr-1" /> View
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="changes" aria-label="View changes mode">
+                        <GitCompareArrows className="h-4 w-4 mr-1" /> Changes
+                    </ToggleGroupItem>
+                    <ToggleGroupItem value="edit" aria-label="Edit mode">
+                         <Pencil className="h-4 w-4 mr-1" /> Edit
+                    </ToggleGroupItem>
+                </ToggleGroup>
+                {/* Optional: Add other controls here if needed */}
+            </div>
+            {/* --- END NEW --- */}
 
             {/* Submission Status Alert */}
             {submitStatus && (
@@ -265,36 +412,110 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                 </AlertDescription>
               </Alert>
           )}
+
+            {/* --- NEW: Explanatory Note Display (View Mode Only) --- */}
+            {viewMode === 'view' && explanatoryNoteHtml && isExplanatoryNoteVisible && (
+                 <Alert variant="default" className="mb-3 border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-gray-800 relative">
+                     <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                     <AlertTitle className="text-blue-800 dark:text-blue-300">Explanatory Note</AlertTitle>
+                     <AlertDescription className="prose dark:prose-invert max-w-none text-sm text-gray-700 dark:text-gray-300">
+                          {/* Render the extracted HTML */}
+                          <div dangerouslySetInnerHTML={{ __html: explanatoryNoteHtml }} />
+                     </AlertDescription>
+                     <button
+                         onClick={() => setIsExplanatoryNoteVisible(false)}
+                         className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                         aria-label="Close explanatory note"
+                     >
+                         <X className="h-4 w-4" />
+                     </button>
+                 </Alert>
+             )}
+             {/* --- END NEW --- */}
+
+            {/* --- NEW: Display Changes Loading/Error --- */}
+             {(viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges && (
+                <div className="text-sm text-gray-500 dark:text-gray-400 my-2 flex items-center">
+                    <Loader2 className="animate-spin h-4 w-4 mr-2" /> Loading changes...
+                </div>
+             )}
+             {(viewMode === 'changes' || viewMode === 'edit') && changesError && (
+                 <Alert variant="destructive" className="my-2">
+                     <AlertCircle className="h-4 w-4" />
+                     <AlertTitle>Error Loading Changes</AlertTitle>
+                     <AlertDescription>{changesError}</AlertDescription>
+                 </Alert>
+             )}
+            {/* --- END NEW --- */}
+
         </div>
 
         {/* --- Sticky Toolbar Area (Non-Scrolling) --- */}
-        <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 py-1 px-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0"> {/* Adjusted padding, removed margins */}
-            {editorInstance && (
-                <LegislationToolbar
-                    editor={editorInstance}
-                    onAddCommentClick={handleToolbarAddCommentClick}
-                />
-            )}
-            {!editorInstance && <div className="h-10 flex items-center text-sm text-gray-400">Toolbar loading...</div>}
-        </div>
+        {/* Only show toolbar in Edit mode */}
+        {viewMode === 'edit' && (
+            <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 py-1 px-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
+                {editorInstance && (
+                    <LegislationToolbar
+                        editor={editorInstance}
+                        onAddCommentClick={handleToolbarAddCommentClick}
+                    />
+                )}
+                {!editorInstance && <div className="h-10 flex items-center text-sm text-gray-400">Toolbar loading...</div>}
+            </div>
+        )}
 
         {/* --- Scrollable Editor Area --- */}
-        <div ref={mainContentRef} className="flex-grow overflow-y-auto p-6 pt-2 scroll-smooth"> {/* Scrollable area with padding */}
+        {/* Adjust padding top if toolbar is not visible */}
+        <div ref={mainContentRef} className={`flex-grow overflow-y-auto p-6 ${viewMode === 'edit' ? 'pt-2' : 'pt-4'} scroll-smooth`}>
             {/* Single Editor for the whole document */}
             <div className="flex-grow"> {/* Removed prose class, Tiptap usually handles this */}
-              <LegislationEditor
-                content={fullDocumentHtml}
-                editable={true}
-                onChange={setFullDocumentHtml}
-                onAddCommentClick={handleToolbarAddCommentClick}
-                onEditorReady={handleEditorReady}
-                showToolbar={false}
-              />
+              { (viewMode === 'changes' || viewMode === 'edit') && baseHtmlForDiff !== null ? (
+                  <div className={`border rounded p-4 ${allPendingChanges.length > 0 ? 'bg-yellow-50 dark:bg-gray-800 border-yellow-200 dark:border-yellow-700' : 'bg-gray-50 dark:bg-gray-800'}`}>
+                      {allPendingChanges.length > 0 && (
+                          <>
+                              <h3 className="text-lg font-semibold mb-2 text-gray-800 dark:text-gray-200">Pending Changes Overview</h3>
+                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                                  Found {allPendingChanges.length} pending change(s). Differences from the original version may be highlighted below.
+                              </p>
+                          </>
+                      )}
+                      {allPendingChanges.length === 0 && (
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                              No pending changes found. Viewing current document state.
+                          </p>
+                      )}
+                      <LegislationEditor
+                          content={fullDocumentHtml} // Always show current state in editor view
+                          editable={viewMode === 'edit'}
+                          onChange={viewMode === 'edit' ? setFullDocumentHtml : undefined}
+                          onAddCommentClick={handleToolbarAddCommentClick}
+                          onEditorReady={handleEditorReady}
+                          showToolbar={false}
+                          // Pass props for diffing
+                          baseHtmlForDiff={baseHtmlForDiff}
+                          currentHtmlForDiff={fullDocumentHtml}
+                      />
+                  </div>
+              ) : (
+                  // View mode OR Edit/Changes mode before changes/base are loaded
+                  <LegislationEditor
+                      content={fullDocumentHtml}
+                      editable={viewMode === 'edit'}
+                      onChange={viewMode === 'edit' ? setFullDocumentHtml : undefined}
+                      onAddCommentClick={handleToolbarAddCommentClick}
+                      onEditorReady={handleEditorReady}
+                      showToolbar={false}
+                      // No diffing needed here
+                      baseHtmlForDiff={null}
+                      currentHtmlForDiff={fullDocumentHtml}
+                  />
+              )}
             </div>
         </div>
 
          {/* Comment Input Sidebar (positioning might need review based on layout changes) */}
-         {showCommentInputFor && selectedLegislation && (
+         {/* Only allow adding comments in Edit mode? Or also View Changes? Let's stick to Edit for now */}
+         {viewMode === 'edit' && showCommentInputFor && selectedLegislation && (
           <div className="absolute top-0 right-0 h-full z-30">
               <CommentInputSidebar
                  markId={showCommentInputFor}

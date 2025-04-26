@@ -96,8 +96,9 @@ interface AppState {
 
   // --- Add state for combined content ---
   fullDocumentHtml: string | null;
-  isSubmitting: boolean; // Ensure this exists
-  submitStatus: { type: 'success' | 'error'; message: string } | null; // Ensure this exists
+  initialFullDocumentHtml: string | null; // <-- NEW: Store the initial HTML
+  isSubmitting: boolean;
+  submitStatus: { type: 'success' | 'error'; message: string } | null;
 
   // Actions are now top-level methods
   fetchLegislationList: () => Promise<void>;
@@ -143,24 +144,6 @@ interface AppState {
   toggleCommentSidebar: () => void;
 }
 
-// Type definition for the Supabase table row (needed for submit action)
-interface ProposedChange {
-    id: number;
-    created_at: string;
-    user_id: string;
-    legislation_id: string;
-    legislation_title: string;
-    section_key: string;
-    section_title: string;
-    original_html: string | null;
-    proposed_html: string | null;
-    status: string;
-    context_before: string | null;
-    context_after: string | null;
-}
-
-// Define the actions available in the store - REMOVED AppActions interface
-
 // Create the Zustand store with Immer middleware for easier state updates
 export const useAppStore = create(
   immer<AppState>((set, get) => ({ // REMOVED: & { actions: AppActions }
@@ -202,6 +185,7 @@ export const useAppStore = create(
 
     // --- Add state for combined content ---
     fullDocumentHtml: null,
+    initialFullDocumentHtml: null, // <-- Initialize new state
     isSubmitting: false,
     submitStatus: null,
 
@@ -387,23 +371,25 @@ export const useAppStore = create(
                 if (!item.fullHref.includes('#heading-') && data.sectionsHtml[item.fullHref]) {
                     const sectionId = generateSafeId(item.title || item.fullHref); 
                     // Add section title heading BEFORE the content
-                    combinedHtml += `<h2 data-section-href="${item.fullHref}" id="${sectionId}">${item.title}</h2>\\n`;
-                    combinedHtml += data.sectionsHtml[item.fullHref] + '\\n'; // Add content
+                    combinedHtml += `<h2 data-section-href="${item.fullHref}" id="${sectionId}">${item.title}</h2>`;
+                    combinedHtml += data.sectionsHtml[item.fullHref]; // Add content
                 } else if (item.fullHref.includes('#heading-')) {
                      // Add non-linked headings for structure
                      const headingId = generateSafeId(item.title || `heading-${item.fullHref}`);
                      // Adjust heading level based on TOC level? (e.g., level 0 -> h2, level 1 -> h3)
                      const headingLevel = Math.min(6, item.level + 2); // Clamp between h2 and h6
-                     combinedHtml += `<h${headingLevel} data-toc-heading="true" id="${headingId}" style="margin-left: ${item.level * 1.5}rem;">${item.title}</h${headingLevel}>\\n`;
+                     combinedHtml += `<h${headingLevel} data-toc-heading="true" id="${headingId}" style="margin-left: ${item.level * 1.5}rem;">${item.title}</h${headingLevel}>`;
                 }
             });
         }
 
+        // Store both initial and current (which are the same initially)
         set({
-          selectedLegislationContent: data, // Store the raw structured content
+          selectedLegislationContent: data,
           isLoadingContent: false,
-          fullDocumentHtml: combinedHtml,   // Set the combined HTML
-          hasUnsavedChanges: false, // Reset unsaved changes flag
+          fullDocumentHtml: combinedHtml,
+          initialFullDocumentHtml: combinedHtml, // <-- Store the initial version
+          hasUnsavedChanges: false,
         });
 
         // Fetch comments associated with this legislation *after* content is set
@@ -419,7 +405,8 @@ export const useAppStore = create(
             errorContent: error.message || "Failed to load content", 
             isLoadingContent: false, 
             selectedLegislationContent: null, 
-            fullDocumentHtml: null 
+            fullDocumentHtml: null,
+            initialFullDocumentHtml: null // <-- Clear initial on error
         });
       }
     },
@@ -428,10 +415,8 @@ export const useAppStore = create(
         const currentSelection = get().selectedLegislation;
         if (currentSelection) {
             console.log("[Store] Resetting content for:", currentSelection.identifier);
-            // Refetch original content using the HREF
-            get().fetchLegislationContent(currentSelection.href); 
-            // Fetching content already resets these flags:
-            // set({ hasUnsavedChanges: false, submitStatus: null, isSubmitting: false }); 
+            get().fetchLegislationContent(currentSelection.href);
+            // fetchLegislationContent already resets initialFullDocumentHtml and hasUnsavedChanges
         } else {
              console.warn("[Store] Cannot reset content, no legislation selected.");
         }
@@ -648,30 +633,45 @@ export const useAppStore = create(
     },
 
     submitChangesForReview: async () => {
-      const supabase = createClient(); // Create client instance for this action
+      const supabase = createClient();
       const {
         selectedLegislation,
-        fullDocumentHtml, // Use the combined HTML
+        fullDocumentHtml, // Current proposed HTML
+        initialFullDocumentHtml, // The very first loaded HTML
         hasUnsavedChanges
       } = get();
 
-      if (!hasUnsavedChanges) {
-          console.log("No unsaved changes to submit.");
-          set({ submitStatus: { type: 'success', message: 'No changes detected.'}, isSubmitting: false });
-          // Use setTimeout to clear the status message after a few seconds
-          setTimeout(() => set({ submitStatus: null }), 3000);
-          return { success: true, error: "No changes to submit." };
+      // Check if initial content was ever loaded
+      if (initialFullDocumentHtml === null && selectedLegislation) {
+         console.error("Submit Error: Initial content was never loaded or failed to load.");
+         set({ submitStatus: { type: 'error', message: 'Cannot submit: Initial content missing.'}, isSubmitting: false });
+         setTimeout(() => set({ submitStatus: null }), 5000);
+         return { success: false, error: "Cannot submit: Initial content missing." };
       }
 
+      // Check for actual changes relative to the initially loaded state
+      // Note: hasUnsavedChanges flag is still useful for UI indication,
+      // but this check prevents submitting if the user reverted back to original.
+      if (fullDocumentHtml === initialFullDocumentHtml) {
+        console.log("No effective changes compared to initial version.");
+        set({ submitStatus: { type: 'success', message: 'No changes from original version.'}, isSubmitting: false });
+        setTimeout(() => set({ submitStatus: null }), 3000);
+        // Resetting hasUnsavedChanges as there's nothing to save
+        set({ hasUnsavedChanges: false });
+        return { success: true, error: "No changes from original version." };
+      }
+
+
       if (!selectedLegislation || fullDocumentHtml === null) {
+        // This check might be redundant now due to initialFullDocumentHtml check, but keep for safety
         console.error("Submit Error: Missing required data.", { selectedLegislation, fullDocumentHtml });
-        set({ submitStatus: { type: 'error', message: 'Missing legislation data or content.'}, isSubmitting: false });
+        set({ submitStatus: { type: 'error', message: 'Missing legislation data or current content.'}, isSubmitting: false });
         setTimeout(() => set({ submitStatus: null }), 5000);
         return { success: false, error: "Cannot submit: Missing current or original legislation data." };
       }
 
       // Get user ID
-      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      const { data: { user }, error: userError } = await supabase.auth.getUser(); // Rely on server session handling if possible
       if (userError || !user) {
           console.error("Submit changes failed: User not authenticated.", userError);
           const message = `User not authenticated: ${userError?.message || 'Please log in.'}`;
@@ -681,22 +681,22 @@ export const useAppStore = create(
       }
       const userId = user.id;
 
-      // Prepare the payload
-      // The backend API at /api/legislation/:identifier/submit needs to handle this structure
+      // Prepare the payload for the API
       const payload = {
         identifier: selectedLegislation.identifier,
-        content: fullDocumentHtml, // Send the full combined HTML
-        // title: selectedLegislation.title // Optional: send title for context
+        title: selectedLegislation.title, // Send title
+        initialHtml: initialFullDocumentHtml, // Send the absolute initial HTML
+        proposedHtml: fullDocumentHtml, // Send the current HTML
       };
 
-      set({ isSubmitting: true, submitStatus: null }); // Set submitting flag
+      set({ isSubmitting: true, submitStatus: null });
       try {
         console.log(`[AppStore] Submitting changes for ${payload.identifier} by user ${userId}.`);
 
         const response = await fetch(`/api/legislation/${payload.identifier}/submit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
+            body: JSON.stringify(payload), // Send the new payload
         });
 
         if (!response.ok) {
@@ -708,15 +708,18 @@ export const useAppStore = create(
         const result = await response.json();
 
         // Successfully submitted: Reset flag
-        set(state => { 
-            state.hasUnsavedChanges = false;
+        set(state => {
+            state.hasUnsavedChanges = false; // Reset flag after successful submit
             state.isSubmitting = false;
             state.submitStatus = { type: 'success', message: result.message || 'Changes submitted successfully!' };
+            // IMPORTANT: We might need to update `initialFullDocumentHtml` here if the workflow
+            // assumes the newly submitted version becomes the new "base" for the *next* edit.
+            // Or, refetching pending changes might handle this implicitly. Let's leave it for now.
         });
-        // Clear status after delay
         setTimeout(() => set({ submitStatus: null }), 3000);
 
         console.log("Changes submitted successfully via API.");
+        // Consider refetching pending changes here if needed: get().fetchAllChanges();
         return { success: true };
 
       } catch (err) {
@@ -738,20 +741,17 @@ export const useAppStore = create(
 
     // --- Add action for combined content ---
     setFullDocumentHtml: (html) => {
-        // Compare with the *originally loaded* combined HTML if possible,
-        // otherwise, just compare with the previous state.
-        // This requires storing the original combined HTML somewhere, maybe
-        // alongside originalLegislationContent, or deriving it when needed.
-        // For now, a simple check against the *previous* state:
         const previousHtml = get().fullDocumentHtml;
+        // We use previousHtml for the unsaved changes *indicator* in the UI.
+        // The actual check for submitting is against initialFullDocumentHtml.
         set((state) => {
             state.fullDocumentHtml = html;
-            // Only set unsaved if the HTML actually changed from the last update
             if (html !== previousHtml) {
                 console.log("[Store] Content changed, marking as unsaved.");
                 state.hasUnsavedChanges = true;
             } else {
-                console.log("[Store] Content update received, but no change detected.");
+                 // Avoid marking as unsaved if the content didn't actually change from the last state update
+                 // console.log("[Store] Content update received, but no change detected from previous state.");
             }
         });
     },

@@ -79,4 +79,32 @@
     float: left;
     height: 0;
     pointer-events: none;
+}
+
+.change-highlight {
+  /* Generic style for any change */
+  border-radius: 2px;
+  padding: 0 1px;
+  margin: 0 -1px;
+  cursor: help; /* Indicate interactable */
+}
+
+.change-insert {
+    background-color: rgba(0, 255, 0, 0.2); /* Light green for insertions */
+    /* Optional: Add distinct border/underline */
+    /* border-bottom: 1px solid rgba(0, 128, 0, 0.5); */
+}
+
+/* Optional: Style on hover */
+.change-insert:hover {
+    background-color: rgba(0, 255, 0, 0.4);
+}
+
+/* Deletion handling would require different CSS and likely different decoration types (e.g., widgets) */
+/* .change-delete { ... } */
+
+/* Ensure highlights don't override comment highlights completely */
+/* Adjust as needed */
+.comment-highlight.change-insert {
+    box-shadow: 0 0 0 1px rgba(0, 200, 0, 0.6);
 } 

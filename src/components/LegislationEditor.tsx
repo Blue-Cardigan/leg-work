@@ -1,10 +1,12 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useEditor, EditorContent, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import Link from '@tiptap/extension-link'; // Import Link extension
+import { Decoration, DecorationSet } from 'prosemirror-view'; // Import ProseMirror decorations
+import { Node as ProseMirrorNode } from 'prosemirror-model'; // Import Node type
 
 // --- Import extensions to customize --- 
 import Paragraph from '@tiptap/extension-paragraph';
@@ -13,6 +15,9 @@ import { Mark, Command } from '@tiptap/core'; // Import more types and Command
 import { useAppStore } from '@/lib/store/useAppStore'; // Import store for actions
 import { Editor } from '@tiptap/react'; // Ensure Editor type is imported
 // --- End imports ---
+
+// --- Diff Match Patch ---
+import { diff_match_patch, DIFF_DELETE, DIFF_INSERT, DIFF_EQUAL } from 'diff-match-patch';
 
 // Basic styling for the editor - adjust as needed
 import './LegislationEditor.css';
@@ -236,15 +241,112 @@ const CommentMark = Mark.create<CommentMarkOptions>({
 });
 // --- End Custom Mark for Comments ---
 
-interface LegislationEditorProps {
-  content: string | null; // Accept HTML string or null
-  editable?: boolean; // Make editable controllable
-  onChange?: (newContent: string) => void; // Add onChange prop
-  // Add the callback prop for comment initiation
-  onAddCommentClick?: (markId: string) => void;
-  onEditorReady?: (editor: Editor) => void; // Callback to pass editor instance up
-  showToolbar?: boolean; // New prop to control internal toolbar visibility
+// --- Add ProposedChange Type Here (if not globally defined/imported) ---
+// Or import it if defined elsewhere
+interface ProposedChange {
+    id: number;
+    created_at: string;
+    user_id: string;
+    legislation_id: string;
+    legislation_title: string;
+    section_key: string;
+    section_title: string;
+    original_html: string | null;
+    proposed_html: string | null;
+    status: string;
+    context_before: string | null;
+    context_after: string | null;
 }
+// ---
+
+interface LegislationEditorProps {
+  content: string | null;
+  editable?: boolean;
+  onChange?: (newContent: string) => void;
+  onAddCommentClick?: (markId: string) => void;
+  onEditorReady?: (editor: Editor) => void;
+  showToolbar?: boolean;
+  // --- NEW Diff Props (Make Optional) ---
+  baseHtmlForDiff?: string | null;
+  currentHtmlForDiff?: string | null;
+}
+
+// --- Helper: Convert HTML to Plain Text (Basic) ---
+const convertHtmlToPlainText = (html: string | null): string => {
+    if (!html) return '';
+    try {
+        // Use the browser's DOM parser for simplicity
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        // Add spaces around block elements for better diff alignment
+        tempDiv.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, li').forEach(el => {
+            el.before(' ');
+            el.after(' ');
+        });
+        return tempDiv.textContent || tempDiv.innerText || '';
+    } catch (e) {
+        console.error("Error converting HTML to plain text:", e);
+        return '';
+    }
+};
+// --- End Helper ---
+
+// --- Helper: Map Plain Text Char Index to ProseMirror Pos (Simplified Placeholder) ---
+// THIS IS A COMPLEX PROBLEM and this implementation is basic.
+// It might not handle nested nodes, marks, or complex structures accurately.
+const mapCharIndexToPos = (doc: ProseMirrorNode, charIndex: number, assoc: -1 | 1 = 1): number | null => {
+    let currentPos = 0;
+    let currentCharCount = 0;
+    let resultPos: number | null = null;
+
+    // We need to traverse the document and count characters in text nodes.
+    doc.descendants((node, pos) => {
+        if (resultPos !== null) return false; // Stop searching once found
+
+        if (node.isText) {
+            const nodeSize = node.nodeSize;
+            const nextCharCount = currentCharCount + nodeSize;
+
+             // Check if the target index falls within this text node
+             // assoc = 1 (default) means associate with the character *after* the index
+             // assoc = -1 means associate with the character *before* the index
+             // This helps determine position at boundaries.
+
+             if (assoc === 1) {
+                if (charIndex >= currentCharCount && charIndex < nextCharCount) {
+                    resultPos = pos + (charIndex - currentCharCount);
+                    return false; // Stop traversal
+                }
+             } else { // assoc === -1
+                 if (charIndex > currentCharCount && charIndex <= nextCharCount) {
+                     // Associate with the position *before* the character at charIndex
+                     resultPos = pos + (charIndex - currentCharCount);
+                     return false; // Stop traversal
+                 }
+             }
+            currentCharCount = nextCharCount;
+        } else if (node.isBlock && node.nodeSize > 0 && !node.isTextblock) {
+             // Account for potential implicit characters/positions for block nodes?
+             // ProseMirror positions exist *between* nodes.
+             // This needs more sophisticated handling based on ProseMirror's structure.
+             // For simplicity, we can increment char count slightly for blocks to aid mapping,
+             // but this is inaccurate. A better way involves tracking ProseMirror pos directly.
+            // currentCharCount++; // Example: Add 1 for block boundaries (crude)
+        }
+        // Update currentPos based on node size? Not reliable for char count.
+        // currentPos += node.nodeSize; // Incorrect for character mapping
+
+        return true; // Continue traversal
+    });
+
+     // Handle case where index is at the very end
+     if (resultPos === null && charIndex === currentCharCount) {
+         resultPos = doc.content.size; // Position at the end of the doc content
+     }
+
+    return resultPos;
+};
+// --- End Helper ---
 
 const LegislationEditor: React.FC<LegislationEditorProps> = ({ 
     content, 
@@ -253,7 +355,12 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     onAddCommentClick,
     onEditorReady, // Destructure the new prop
     showToolbar = true, // Default to true if not provided
+    baseHtmlForDiff,    // <-- Destructure new prop
+    currentHtmlForDiff // <-- Destructure new prop
 }) => { // Default editable to true
+  // Initialize diff-match-patch instance
+  const dmp = useMemo(() => new diff_match_patch(), []);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -297,6 +404,74 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     },
     // Add this line to fix SSR hydration issue
     immediatelyRender: false, 
+    // --- NEW: Add editorProps with decorations ---
+    editorProps: {
+        attributes: {
+            // Add Tailwind prose classes for styling when not using the outer wrapper's prose
+            class: 'prose dark:prose-invert prose-sm sm:prose-base lg:prose-lg xl:prose-xl focus:outline-none max-w-none',
+        },
+        decorations(state) {
+            const decorations: Decoration[] = [];
+            const doc = state.doc;
+
+            // --- Diff Calculation ---
+            if (baseHtmlForDiff !== null && currentHtmlForDiff !== null && baseHtmlForDiff !== currentHtmlForDiff) {
+                const baseText = convertHtmlToPlainText(baseHtmlForDiff ?? null);
+                const currentText = convertHtmlToPlainText(currentHtmlForDiff ?? null);
+
+                // Ensure text differs to avoid unnecessary diffing
+                if (baseText !== currentText) {
+                    console.log("[LegislationEditor] Calculating diff...");
+                    const diffs = dmp.diff_main(baseText, currentText);
+                    dmp.diff_cleanupSemantic(diffs); // Improve diff quality
+
+                    let currentTextCharIndex = 0; // Track position in the *current* text
+
+                    diffs.forEach(([op, text]) => {
+                        if (op === DIFF_INSERT) {
+                            const startIndex = currentTextCharIndex;
+                            const endIndex = currentTextCharIndex + text.length;
+                            // Map char indices to ProseMirror positions
+                            const from = mapCharIndexToPos(doc, startIndex, 1); // Associate with char after start index
+                            const to = mapCharIndexToPos(doc, endIndex, -1);   // Associate with char before end index
+
+                            if (from !== null && to !== null && from < to) {
+                                 console.log(`[Diff] INSERT: "${text}" from ${from} to ${to}`);
+                                 decorations.push(
+                                     Decoration.inline(from, to, {
+                                         class: 'change-highlight change-insert',
+                                         'data-diff-type': 'insert',
+                                     })
+                                 );
+                            } else {
+                                console.warn(`[Diff] Could not map INSERT indices: ${startIndex}-${endIndex} to positions ${from}-${to}`);
+                            }
+                            currentTextCharIndex += text.length; // Advance index in current text
+                        } else if (op === DIFF_DELETE) {
+                            // Deletions don't exist in the current text, but we might want to mark
+                            // the position *where* they were deleted. This is tricky.
+                            // For simplicity, we'll focus on highlighting insertions for now.
+                            // To show deletions, you might need a different approach, like
+                            // rendering the *base* text and highlighting deletions in it,
+                            // or using widgets at the deletion position in the *current* text.
+                            console.log(`[Diff] DELETE: "${text}" (Highlighting not implemented)`);
+                            // No change to currentTextCharIndex as deletion isn't in current text
+                        } else if (op === DIFF_EQUAL) {
+                            // Advance index in current text
+                            currentTextCharIndex += text.length;
+                        }
+                    });
+                }
+            }
+            // --- End Diff Calculation ---
+
+            // --- Add Comment Focus Decoration (Optional - might be handled by mark styles) ---
+            // if (focusedMarkId) { ... }
+
+            return DecorationSet.create(doc, decorations);
+        },
+    },
+    // --- END NEW ---
   });
 
   // Ensure editor is destroyed on unmount
@@ -305,6 +480,21 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
       editor?.destroy();
     };
   }, [editor]);
+
+  // --- Add focusedMarkId from store to re-render decorations when it changes ---
+  const focusedMarkId = useAppStore((state) => state.focusedMarkId);
+
+  // --- Effect to potentially force decoration update ---
+  // Use sparingly, might cause performance issues. Often React re-renders are enough.
+  useEffect(() => {
+    if (editor) {
+         console.log("[LegislationEditor] Forcing decoration update due to diff inputs change.");
+         // Only dispatch if the view is ready
+         if (editor.view.dom?.isConnected) {
+             editor.view.dispatch(editor.state.tr);
+         }
+    }
+  }, [baseHtmlForDiff, currentHtmlForDiff, editor]); // Re-run if editor instance or diff inputs change
 
   if (!editor) {
     return null; // Or a loading state

@@ -170,3 +170,24 @@
   box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.4); /* Light blue ring */
   /* Use !important cautiously if needed to override tiptap/prosemirror styles */
 }
+
+.change-highlight {
+  background-color: rgba(255, 255, 0, 0.3); /* Yellow highlight */
+  /* Add other styles like underline if desired */
+  /* text-decoration: underline wavy rgba(255, 165, 0, 0.7); */
+  cursor: help; /* Indicate interactable */
+  border-radius: 2px;
+  padding: 0 1px;
+  margin: 0 -1px;
+}
+
+/* Optional: Style on hover */
+.change-highlight:hover {
+    background-color: rgba(255, 255, 0, 0.5);
+}
+
+/* Ensure highlights don't override comment highlights completely */
+.comment-highlight.change-highlight {
+    /* Maybe use box-shadow or outline? */
+    box-shadow: 0 0 0 1px rgba(255, 255, 0, 0.6);
+}
