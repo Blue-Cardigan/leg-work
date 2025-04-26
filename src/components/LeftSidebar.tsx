@@ -1,6 +1,6 @@
 'use client'; // Mark as a Client Component
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 // Revert to direct import of the main store hook and necessary types
 import { 
   useAppStore, 
@@ -8,6 +8,21 @@ import {
   // Import the selector hook
   useFilteredLegislationList, 
 } from '@/lib/store/useAppStore'; 
+// Import Auth components and types
+import UserAuth from './UserAuth';
+import { createClient } from '@/lib/supabaseClient';
+// Correct import for User type
+import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'; 
+import { Info, Filter } from 'lucide-react'; // Icon for the prompt and Filter button
+import { Button } from '@/components/ui/button'; // Import Button
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
+} from "@/components/ui/dropdown-menu" // Import Dropdown components
 
 export default function LeftSidebar() {
   // Select necessary state and actions directly from the store
@@ -22,6 +37,10 @@ export default function LeftSidebar() {
   const setSelectedTypes = useAppStore((state) => state.setSelectedTypes);
   const availableTypes = useAppStore((state) => state.availableTypes);
   const selectedTypes = useAppStore((state) => state.selectedTypes);
+  // --- Get amendment state and action ---
+  const showAmendments = useAppStore((state) => state.showAmendments);
+  const toggleShowAmendments = useAppStore((state) => state.toggleShowAmendments);
+  // ----------------------------------
 
   // --- Use the dedicated selector hook for the filtered list --- 
   const filteredLegislationList = useFilteredLegislationList(); 
@@ -45,10 +64,37 @@ export default function LeftSidebar() {
   });
   */
 
+  // Local state for auth status
+  const supabase = createClient();
+  const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   // Fetch list on component mount
   useEffect(() => {
     fetchLegislationList();
   }, [fetchLegislationList]);
+
+  // Fetch user state and listen for auth changes
+  useEffect(() => {
+    setAuthLoading(true);
+    const fetchUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      setUser(user);
+      setAuthLoading(false);
+    };
+    fetchUser();
+
+    const { data: authListener } = supabase.auth.onAuthStateChange(
+      (event: AuthChangeEvent, session: Session | null) => { // Add explicit types
+        setUser(session?.user ?? null);
+        setAuthLoading(false);
+      }
+    );
+
+    return () => {
+      authListener?.subscription.unsubscribe();
+    };
+  }, [supabase.auth]);
 
   // Handler for checkbox changes
   const handleTypeChange = (type: string, checked: boolean) => {
@@ -65,43 +111,64 @@ export default function LeftSidebar() {
     setSelectedTypes(newSelectedTypes);
   };
 
+  const isLoggedIn = !authLoading && !!user;
+
   return (
     <div className="flex flex-col h-full bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
-      {/* Title & Search Input */}
+      {/* Title, Search Input & Filter Dropdown */}
       <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-         <h2 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-200">Draft Legislation</h2>
-        <input
-          type="text"
-          placeholder="Search by title, year, ID..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full px-3 py-2 border rounded bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={isLoadingList}
-        />
-      </div>
+        <h2 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-200">Draft Legislation</h2>
+        <div className="flex gap-1 items-center">
+          <input
+            type="text"
+            placeholder="Search by title, year, ID..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="flex-grow px-3 py-2 border rounded bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0"
+            disabled={isLoadingList}
+          />
+          {/* --- Filter Dropdown --- */} 
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="icon" disabled={isLoadingList} className="flex-shrink-0">
+                <Filter className="h-4 w-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56">
+              <DropdownMenuLabel>Filter Options</DropdownMenuLabel>
+              <DropdownMenuSeparator />
 
-      {/* Type Filters Section */}
-      {/* Ensure availableTypes is available before mapping */}
-      {availableTypes && availableTypes.length > 0 && (
-        <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-          <h3 className="text-sm font-medium mb-2 text-gray-600 dark:text-gray-400">Filter by Type:</h3>
-          <div className="space-y-1">
-            {availableTypes.map((type: string) => (
-              <label key={type} className="flex items-center space-x-2 text-sm text-gray-700 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  // Ensure selectedTypes is available before checking includes
-                  checked={selectedTypes?.includes(type) ?? false}
-                  onChange={(e) => handleTypeChange(type, e.target.checked)}
-                  className="form-checkbox h-4 w-4 text-blue-600 rounded border-gray-300 dark:border-gray-600 focus:ring-blue-500 bg-white dark:bg-gray-700"
-                  disabled={isLoadingList}
-                />
-                <span>{type.toUpperCase()}</span> 
-              </label>
-            ))}
-          </div>
+              {/* Show Amendments Toggle */}
+              <DropdownMenuCheckboxItem
+                checked={showAmendments}
+                onCheckedChange={toggleShowAmendments}
+                disabled={isLoadingList}
+              >
+                Show Amendments
+              </DropdownMenuCheckboxItem>
+
+              {/* Type Filters - only show if availableTypes exist */}
+              {availableTypes && availableTypes.length > 0 && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuLabel>Document Types</DropdownMenuLabel>
+                  {availableTypes.map((type: string) => (
+                    <DropdownMenuCheckboxItem
+                      key={type}
+                      checked={selectedTypes?.includes(type) ?? false}
+                      onCheckedChange={(checked) => handleTypeChange(type, !!checked)} // Ensure checked is boolean
+                      disabled={isLoadingList}
+                    >
+                      {type.toUpperCase()}
+                    </DropdownMenuCheckboxItem>
+                  ))}
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          {/* ------------------------ */} 
         </div>
-      )}
+      </div>
 
       {/* List Area */}
       <div className="flex-grow overflow-y-auto">
@@ -111,7 +178,7 @@ export default function LeftSidebar() {
         {!isLoadingList && !error && (!filteredLegislationList || filteredLegislationList.length === 0) && (
           <div className="p-4 text-center text-gray-500 dark:text-gray-400">
              {searchTerm || (availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length) 
-               ? `No documents match "${searchTerm}" ${availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length ? 'with selected types' : ''}.` 
+               ? `No documents match "${searchTerm}" ${availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length ? 'with selected types' : ''}${!showAmendments ? ' (excluding amendments)' : ''}.` 
                : 'No draft documents found.'}
           </div>
         )}
@@ -138,6 +205,21 @@ export default function LeftSidebar() {
             ))}
           </ul>
         )}
+      </div>
+
+      {/* Footer: Auth Component and Prompt */}
+      <div className="p-2 border-t border-gray-200 dark:border-gray-700 mt-auto bg-gray-50 dark:bg-gray-900/50">
+        {/* Login Prompt */} 
+        {!authLoading && !isLoggedIn && (
+            <div className="flex items-start space-x-2 text-xs text-gray-600 dark:text-gray-400 mb-2 p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
+                 <Info className="h-4 w-4 mt-0.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
+                 <span>Log in with your account to propose and track changes to legislation documents.</span>
+            </div>
+        )}
+        {/* Auth Component */} 
+        <div className="flex justify-center">
+            <UserAuth />
+        </div>
       </div>
     </div>
   );

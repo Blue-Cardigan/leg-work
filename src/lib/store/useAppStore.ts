@@ -1,5 +1,8 @@
 import { create } from 'zustand';
-import { immer } from 'zustand/middleware/immer'; // Import immer
+import { useMemo } from 'react';
+import { createClient } from '@/lib/supabaseClient';
+import { immer } from 'zustand/middleware/immer';
+import type { User } from '@supabase/supabase-js';
 
 // Define the shape of a legislation item
 export interface LegislationItem {
@@ -54,6 +57,15 @@ interface AppState {
   chatError: Error | string | null;
   // --- END NEW ---
 
+  // --- NEW: Amendment Filter State ---
+  showAmendments: boolean;
+  // --- END NEW ---
+
+  // --- Add back state for change tracking ---
+  originalLegislationContent: LegislationContent | null; // Store the initial loaded content
+  hasUnsavedChanges: boolean; // Flag to track edits
+  // --- End Add back ---
+
   // Actions are now top-level methods
   fetchLegislationList: () => Promise<void>;
   setSearchTerm: (term: string) => void;
@@ -68,6 +80,30 @@ interface AppState {
   updateIntroHtml: (newHtml: string) => void;
   updateSectionHtml: (href: string, newHtml: string) => void;
   // --- END NEW ---
+  // --- NEW: Amendment Filter Action ---
+  toggleShowAmendments: () => void;
+  // --- END NEW ---
+
+  // --- Add back actions for change tracking & submission ---
+  setOriginalContent: (content: LegislationContent | null) => void; // Internal action
+  submitChangesForReview: () => Promise<{ success: boolean; error?: string }>;
+  // --- End Add back ---
+}
+
+// Type definition for the Supabase table row (needed for submit action)
+interface ProposedChange {
+    id: number;
+    created_at: string;
+    user_id: string;
+    legislation_id: string;
+    legislation_title: string;
+    section_key: string;
+    section_title: string;
+    original_html: string | null;
+    proposed_html: string | null;
+    status: string;
+    context_before: string | null;
+    context_after: string | null;
 }
 
 // Define the actions available in the store - REMOVED AppActions interface
@@ -91,6 +127,14 @@ export const useAppStore = create(
     isChatLoading: false,
     chatError: null,
     // --- END NEW ---
+    // --- NEW: Amendment Filter Initial State ---
+    showAmendments: false, // Default to true
+    // --- END NEW ---
+
+    // --- Add back initial state for change tracking ---
+    originalLegislationContent: null,
+    hasUnsavedChanges: false,
+    // --- End Add back ---
 
     // --- Actions are now defined directly --- 
     fetchLegislationList: async () => {
@@ -123,6 +167,8 @@ export const useAppStore = create(
             if (!stillExists) {
               state.selectedLegislation = null; 
               state.selectedLegislationContent = null;
+              state.originalLegislationContent = null; // Clear original if item removed
+              state.hasUnsavedChanges = false; // Reset flag
               state.isLoadingContent = false;
               state.errorContent = null;
             }
@@ -151,28 +197,39 @@ export const useAppStore = create(
     },
 
     setSelectedLegislation: (item: LegislationItem | null) => {
-      if (item && item.href === get().selectedLegislation?.href) {
-        return;
+      if (get().hasUnsavedChanges) {
+          if (!confirm("You have unsaved changes. Are you sure you want to switch legislation? Your changes will be lost.")) {
+              return; // User cancelled
+          }
       }
+
+      if (item && item.href === get().selectedLegislation?.href) {
+        return; // Don't reload if already selected
+      }
+
       set((state) => {
         state.selectedLegislation = item;
         state.selectedLegislationContent = null; 
-        state.isLoadingContent = false;
+        state.originalLegislationContent = null; 
+        state.isLoadingContent = !!item; // Correctly sets loading to true when an item is selected
         state.errorContent = null;
+        state.hasUnsavedChanges = false; 
       });
+
       if (item?.href) {
-        get().fetchLegislationContent(item.href); // Call the top-level action
+        get().fetchLegislationContent(item.href);
       }
     },
 
     fetchLegislationContent: async (url: string) => {
-      if (!url) return;
-      if (get().isLoadingContent) return; 
+      if (!url) return; 
 
       set((state) => {
-        state.isLoadingContent = true;
-        state.errorContent = null;
-        state.selectedLegislationContent = null; 
+          if (!state.isLoadingContent) state.isLoadingContent = true;
+         state.errorContent = null;
+         state.selectedLegislationContent = null; 
+         state.originalLegislationContent = null; 
+         state.hasUnsavedChanges = false;
       });
 
       try {
@@ -180,30 +237,52 @@ export const useAppStore = create(
         const response = await fetch(apiUrl);
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+             const errorBody = await response.text(); 
+             console.error(`[AppStore] HTTP error fetching content! Status: ${response.status}, URL: ${apiUrl}, Body: ${errorBody}`);
+             throw new Error(`HTTP error! status: ${response.status}`);
         }
         const data: LegislationContent = await response.json(); 
+        console.log("[AppStore] Content received:", data);
 
+         if (!data || typeof data.introHtml === 'undefined' || !data.toc || !data.sectionsHtml) {
+            console.error("[AppStore] Invalid content structure received:", data);
+            throw new Error("Invalid content structure received from API.");
+         }
+
+        get().setOriginalContent(data);
+        
         set((state) => {
           state.selectedLegislationContent = data;
-          state.isLoadingContent = false;
+          state.isLoadingContent = false; // Set loading false on success
+          // hasUnsavedChanges is reset by setOriginalContent
         });
+
       } catch (e) {
          const error = e instanceof Error ? e : new Error(String(e));
-        console.error("Failed to fetch legislation content:", error);
+        console.error("[AppStore] Failed to fetch legislation content:", error);
         set((state) => {
           state.errorContent = error.message;
-          state.isLoadingContent = false;
+          state.isLoadingContent = false; // Set loading false on error
+          state.selectedLegislation = null; 
+          state.selectedLegislationContent = null;
+          state.originalLegislationContent = null;
+          state.hasUnsavedChanges = false;
         });
       }
     },
     
      resetContent: () => {
-      set((state) => {
-        state.selectedLegislationContent = null;
-        state.isLoadingContent = false;
-        state.errorContent = null;
-      });
+        // --- Reset editable content to the stored original content --- 
+        set((state) => {
+            if (state.originalLegislationContent) {
+                // Use deep copy to avoid modifying the original state accidentally
+                state.selectedLegislationContent = JSON.parse(JSON.stringify(state.originalLegislationContent));
+            }
+            state.isLoadingContent = false;
+            state.errorContent = null;
+            state.hasUnsavedChanges = false; // Reset flag on discard
+        });
+        // --- End reset --- 
     },
     // --- NEW: Chat Actions Implementation ---
     sendChatMessage: async (messageText: string) => {
@@ -286,42 +365,193 @@ export const useAppStore = create(
     updateIntroHtml: (newHtml: string) => {
       set((state) => {
         if (state.selectedLegislationContent) {
-          state.selectedLegislationContent.introHtml = newHtml;
+          // Check if the content actually changed before updating state
+          if (state.selectedLegislationContent.introHtml !== newHtml) {
+            state.selectedLegislationContent.introHtml = newHtml;
+            state.hasUnsavedChanges = true; // Set flag
+          }
         }
       });
     },
     updateSectionHtml: (href: string, newHtml: string) => {
       set((state) => {
         if (state.selectedLegislationContent?.sectionsHtml) {
-          state.selectedLegislationContent.sectionsHtml[href] = newHtml;
+           // Check if the content actually changed before updating state
+           if (state.selectedLegislationContent.sectionsHtml[href] !== newHtml) {
+              state.selectedLegislationContent.sectionsHtml[href] = newHtml;
+              state.hasUnsavedChanges = true; // Set flag
+           }
         }
       });
-    }
+    },
     // --- END NEW ---
+    // --- NEW: Amendment Filter Action Implementation ---
+    toggleShowAmendments: () => {
+      set((state) => {
+        state.showAmendments = !state.showAmendments;
+      });
+    },
+
+    // --- Add back internal action to set original content --- 
+    setOriginalContent: (content) => {
+        set((state) => {
+            // Deep copy to prevent mutations affecting the original state
+            state.originalLegislationContent = content ? JSON.parse(JSON.stringify(content)) : null; 
+            // Reset unsaved changes flag when new original content is set
+            state.hasUnsavedChanges = false; 
+        });
+    },
+    // --- End add back --- 
+
+    // --- Add back action to submit changes --- 
+    submitChangesForReview: async () => {
+      const supabase = createClient(); // Create client instance for this action
+      const {
+        selectedLegislation,
+        selectedLegislationContent,
+        originalLegislationContent,
+        hasUnsavedChanges
+      } = get();
+
+      if (!hasUnsavedChanges) {
+          console.log("No unsaved changes to submit.");
+          return { success: true, error: "No changes to submit." };
+      }
+
+      if (!selectedLegislation || !selectedLegislationContent || !originalLegislationContent) {
+        console.error("Submit Error: Missing required data.", { selectedLegislation, selectedLegislationContent, originalLegislationContent });
+        return { success: false, error: "Cannot submit: Missing current or original legislation data." };
+      }
+
+      // Get user ID
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+          console.error("Submit changes failed: User not authenticated.", userError);
+           return { success: false, error: `User not authenticated: ${userError?.message || 'Please log in.'}` };
+      }
+      const userId = user.id;
+
+      // Define the structure of the data to insert, excluding DB-generated fields
+      const changesToSubmit: Omit<ProposedChange, 'id' | 'created_at'>[] = [];
+
+      // Compare intro HTML
+      if (selectedLegislationContent.introHtml !== originalLegislationContent.introHtml) {
+        changesToSubmit.push({
+          user_id: userId,
+          legislation_id: selectedLegislation.href,
+          legislation_title: selectedLegislation.title,
+          section_key: 'intro',
+          section_title: 'Introduction',
+          original_html: originalLegislationContent.introHtml,
+          proposed_html: selectedLegislationContent.introHtml,
+          status: 'pending',
+          context_before: null, // Placeholder for context
+          context_after: null,  // Placeholder for context
+        });
+      }
+
+      // Compare sections HTML
+      const currentSections = selectedLegislationContent.sectionsHtml || {};
+      const originalSections = originalLegislationContent.sectionsHtml || {};
+      const tocMap = new Map(selectedLegislationContent.toc.map(item => [item.fullHref, item]));
+      const allSectionKeys = new Set([...Object.keys(currentSections), ...Object.keys(originalSections)]);
+
+      allSectionKeys.forEach(key => {
+           const currentHtml = currentSections[key];
+           const originalHtml = originalSections[key];
+
+           if (currentHtml !== originalHtml) {
+               const tocItem = tocMap.get(key);
+               const sectionTitle = tocItem?.title || `Section (${key.split('#')[1] || key})`;
+               // TODO: Implement logic to get context_before and context_after if needed
+
+               changesToSubmit.push({
+                   user_id: userId,
+                   legislation_id: selectedLegislation.href,
+                   legislation_title: selectedLegislation.title,
+                   section_key: key,
+                   section_title: sectionTitle,
+                   original_html: originalHtml ?? null,
+                   proposed_html: currentHtml ?? null,
+                   status: 'pending',
+                   context_before: null, // Placeholder
+                   context_after: null,  // Placeholder
+               });
+           }
+      });
+
+      if (changesToSubmit.length === 0) {
+          // This case might occur if hasUnsavedChanges was true but the content was reverted manually
+          console.warn("Submit changes called, but no actual differences found.");
+          set(state => { state.hasUnsavedChanges = false }); // Correct the flag
+          return { success: true, error: "No actual changes detected to submit." }; 
+      }
+
+      try {
+        console.log(`[AppStore] Submitting ${changesToSubmit.length} changes for user ${userId}.`);
+        const { error } = await supabase
+          .from('proposed_changes')
+          .insert(changesToSubmit);
+
+        if (error) {
+          console.error("Error submitting changes to Supabase:", error);
+          throw error;
+        }
+
+        // Successfully submitted: Update original content to reflect submitted changes & reset flag
+        get().setOriginalContent(selectedLegislationContent); // Use the internal action
+        // The setOriginalContent action already resets hasUnsavedChanges
+
+        console.log("Changes submitted successfully.");
+        return { success: true };
+
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "An unknown error occurred during submission.";
+        console.error("Submission failed:", message);
+        // Don't reset hasUnsavedChanges on failure, allow retry
+        return { success: false, error: message };
+      }
+    },
+    // --- End add back --- 
   }))
 );
 
 // --- Selectors (No changes needed here, but kept for reference) ---
 
-// Selector to get the filtered legislation list based on search term AND selected types
-export const useFilteredLegislationList = () => useAppStore((state) => {
-  const { allLegislationList, searchTerm, selectedTypes, availableTypes } = state;
-  const lowerCaseSearchTerm = searchTerm.toLowerCase();
+// Memoized selector to get the filtered legislation list
+export const useFilteredLegislationList = () => {
+  // Select the necessary state slices
+  const allLegislationList = useAppStore((state) => state.allLegislationList);
+  const searchTerm = useAppStore((state) => state.searchTerm);
+  const selectedTypes = useAppStore((state) => state.selectedTypes);
+  const showAmendments = useAppStore((state) => state.showAmendments);
 
-  if (!searchTerm && selectedTypes.length === availableTypes.length) {
-    return allLegislationList;
-  }
+  // Memoize the filtering logic
+  const filteredList = useMemo(() => {
+    const lowerCaseSearchTerm = searchTerm.toLowerCase();
+    
+    // Apply basic filtering (type and search term)
+    let list = allLegislationList.filter(item => {
+      const typeMatch = selectedTypes.includes(item.type);
+      if (!typeMatch) return false;
 
-  return allLegislationList.filter(item => {
-    const typeMatch = selectedTypes.includes(item.type);
-    if (!typeMatch) return false;
+      if (!searchTerm) return true; 
 
-    if (!searchTerm) return true; 
+      const searchableText = `${item.title} ${item.year} ${item.identifier} ${item.type}`.toLowerCase();
+      return searchableText.includes(lowerCaseSearchTerm);
+    });
 
-    const searchableText = `${item.title} ${item.year} ${item.identifier} ${item.type}`.toLowerCase();
-    return searchableText.includes(lowerCaseSearchTerm);
-  });
-});
+    // Apply amendment filter if necessary
+    if (!showAmendments) {
+      list = list.filter(item => 
+        !item.title.toLowerCase().includes('amendment')
+      );
+    }
+    return list;
+  }, [allLegislationList, searchTerm, selectedTypes, showAmendments]); // Dependencies for memoization
+
+  return filteredList;
+};
 
 // Selector to get the current app state (can be simplified if not needed elsewhere)
 // export const useAppState = () => useAppStore((state) => state);
@@ -333,4 +563,8 @@ export const useFilteredLegislationList = () => useAppStore((state) => {
 export const useAvailableTypes = () => useAppStore((state) => state.availableTypes);
 
 // Selector to get the currently selected types
-export const useSelectedTypes = () => useAppStore((state) => state.selectedTypes); 
+export const useSelectedTypes = () => useAppStore((state) => state.selectedTypes);
+
+// --- Add back selector for hasUnsavedChanges flag ---
+export const useHasUnsavedChanges = () => useAppStore((state) => state.hasUnsavedChanges);
+// --- End add back ---
