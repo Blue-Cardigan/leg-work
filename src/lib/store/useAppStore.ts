@@ -8,7 +8,7 @@ import type { User } from '@supabase/supabase-js';
 export interface LegislationItem {
   title: string;
   href: string; // Full URL
-  identifier: string;
+  identifier: string; // Unique ID (e.g., uksi/2023/123)
   type: string;
   year: string;
 }
@@ -24,7 +24,7 @@ export interface TocItem {
 export interface LegislationContent {
   toc: TocItem[];
   introHtml: string | null;
-  sectionsHtml: { [href: string]: string | null };
+  sectionsHtml: { [href: string]: string | null }; // Corrected property name
 }
 
 // --- NEW: Define Chat Message structure --- 
@@ -35,6 +35,21 @@ export interface ChatMessagePart {
 export interface ChatMessage {
   role: 'user' | 'model';
   parts: ChatMessagePart[];
+}
+// --- END NEW ---
+
+// --- NEW: Define Comment structure ---
+export interface Comment {
+  id: string; // UUID from database
+  legislation_identifier: string; // ID of the legislation document (keep for now, note API uses legislation_id)
+  mark_id: string; // Added: ID linking to the highlighted text in the editor
+  comment_text: string; // Renamed from text to match API/DB
+  created_at: string;
+  user_id: string; // ID of the user who commented
+  user_email?: string; // Added: Email of the user (optional)
+  resolved: boolean; // Keep for now, note API selects resolved_at
+  // Removed range_start_char, range_end_char as they aren't currently used here
+  // Note: section_key is selected in API but not added here yet
 }
 // --- END NEW ---
 
@@ -57,6 +72,14 @@ interface AppState {
   chatError: Error | string | null;
   // --- END NEW ---
 
+  // --- NEW: Comment State ---
+  comments: Comment[];
+  isLoadingComments: boolean;
+  commentsError: Error | string | null;
+  focusedCommentId: string | null; // Track the currently focused comment
+  focusedMarkId: string | null; // Track the currently focused comment mark
+  // --- END NEW ---
+
   // --- NEW: Amendment Filter State ---
   showAmendments: boolean;
   // --- END NEW ---
@@ -65,6 +88,10 @@ interface AppState {
   originalLegislationContent: LegislationContent | null; // Store the initial loaded content
   hasUnsavedChanges: boolean; // Flag to track edits
   // --- End Add back ---
+
+  // --- NEW: Sidebar State ---
+  isSidebarCollapsed: boolean;
+  // --- END NEW ---
 
   // Actions are now top-level methods
   fetchLegislationList: () => Promise<void>;
@@ -80,8 +107,19 @@ interface AppState {
   updateIntroHtml: (newHtml: string) => void;
   updateSectionHtml: (href: string, newHtml: string) => void;
   // --- END NEW ---
+  // --- NEW: Comment Actions ---
+  fetchComments: (legislationIdentifier: string) => Promise<void>;
+  addComment: (newComment: Comment) => void;
+  setFocusedCommentId: (commentId: string | null) => void; // Action to set focused comment
+  setFocusedMarkId: (markId: string | null) => void; // NEW: Action to set focused mark ID
+  // TODO: Add resolveComment, deleteComment actions
+  // --- END NEW ---
   // --- NEW: Amendment Filter Action ---
   toggleShowAmendments: () => void;
+  // --- END NEW ---
+
+  // --- NEW: Sidebar Action ---
+  toggleSidebar: () => void;
   // --- END NEW ---
 
   // --- Add back actions for change tracking & submission ---
@@ -127,14 +165,25 @@ export const useAppStore = create(
     isChatLoading: false,
     chatError: null,
     // --- END NEW ---
+    // --- NEW: Comment Initial State ---
+    comments: [],
+    isLoadingComments: false,
+    commentsError: null,
+    focusedCommentId: null, // Initialize focusedCommentId to null
+    focusedMarkId: null, // Initialize focusedMarkId to null
+    // --- END NEW ---
     // --- NEW: Amendment Filter Initial State ---
-    showAmendments: false, // Default to true
+    showAmendments: false, // Default to false
     // --- END NEW ---
 
     // --- Add back initial state for change tracking ---
     originalLegislationContent: null,
     hasUnsavedChanges: false,
     // --- End Add back ---
+
+    // --- NEW: Sidebar Initial State ---
+    isSidebarCollapsed: false,
+    // --- END NEW ---
 
     // --- Actions are now defined directly --- 
     fetchLegislationList: async () => {
@@ -171,6 +220,15 @@ export const useAppStore = create(
               state.hasUnsavedChanges = false; // Reset flag
               state.isLoadingContent = false;
               state.errorContent = null;
+              state.chatMessages = []; // Clear chat history
+              state.chatError = null;
+              state.isChatLoading = false;
+              state.comments = []; // Clear comments
+              state.commentsError = null;
+              state.isLoadingComments = false;
+              state.focusedCommentId = null; 
+              state.focusedMarkId = null;
+              state.isSidebarCollapsed = true; // Collapse sidebar on selection
             }
           }
         });
@@ -204,21 +262,39 @@ export const useAppStore = create(
       }
 
       if (item && item.href === get().selectedLegislation?.href) {
-        return; // Don't reload if already selected
+        // If the same item is clicked again, just toggle the sidebar
+        get().toggleSidebar(); 
+        return; 
       }
 
       set((state) => {
         state.selectedLegislation = item;
         state.selectedLegislationContent = null; 
         state.originalLegislationContent = null; 
-        state.isLoadingContent = !!item; // Correctly sets loading to true when an item is selected
         state.errorContent = null;
         state.hasUnsavedChanges = false; 
-      });
+        state.isLoadingContent = false;
+        state.chatMessages = []; // Clear chat history
+        state.chatError = null;
+        state.isChatLoading = false;
+        state.comments = []; // Clear comments
+        state.commentsError = null;
+        state.isLoadingComments = false;
+        state.focusedCommentId = null; 
+        state.focusedMarkId = null;
+        // Collapse sidebar ONLY if selecting a NEW item
+        if (item) {
+          state.isSidebarCollapsed = true;
+        } else {
+           // If clearing selection, expand sidebar
+           state.isSidebarCollapsed = false;
+        }
 
-      if (item?.href) {
-        get().fetchLegislationContent(item.href);
-      }
+        // Trigger content fetch if an item is selected
+        if (item) {
+          get().fetchLegislationContent(item.href);
+        }
+      });
     },
 
     fetchLegislationContent: async (url: string) => {
@@ -272,19 +348,17 @@ export const useAppStore = create(
     },
     
      resetContent: () => {
-        // --- Reset editable content to the stored original content --- 
+        // Reset content to original
         set((state) => {
             if (state.originalLegislationContent) {
-                // Use deep copy to avoid modifying the original state accidentally
                 state.selectedLegislationContent = JSON.parse(JSON.stringify(state.originalLegislationContent));
             }
             state.isLoadingContent = false;
             state.errorContent = null;
-            state.hasUnsavedChanges = false; // Reset flag on discard
+            state.hasUnsavedChanges = false; // Reset flag
         });
-        // --- End reset --- 
     },
-    // --- NEW: Chat Actions Implementation ---
+    // --- NEW: Chat Actions ---
     sendChatMessage: async (messageText: string) => {
       if (!messageText.trim() || get().isChatLoading) return;
   
@@ -361,49 +435,123 @@ export const useAppStore = create(
       }
     },
     // --- END NEW ---
-    // --- NEW: Editor Update Actions Implementation ---
+    // --- NEW: Editor Update Actions ---
     updateIntroHtml: (newHtml: string) => {
       set((state) => {
         if (state.selectedLegislationContent) {
-          // Check if the content actually changed before updating state
-          if (state.selectedLegislationContent.introHtml !== newHtml) {
-            state.selectedLegislationContent.introHtml = newHtml;
-            state.hasUnsavedChanges = true; // Set flag
-          }
+          state.selectedLegislationContent.introHtml = newHtml;
+          state.hasUnsavedChanges = true; // Mark changes
         }
       });
     },
     updateSectionHtml: (href: string, newHtml: string) => {
       set((state) => {
-        if (state.selectedLegislationContent?.sectionsHtml) {
-           // Check if the content actually changed before updating state
-           if (state.selectedLegislationContent.sectionsHtml[href] !== newHtml) {
-              state.selectedLegislationContent.sectionsHtml[href] = newHtml;
-              state.hasUnsavedChanges = true; // Set flag
-           }
+        if (state.selectedLegislationContent?.sectionsHtml) { // Corrected property name
+          state.selectedLegislationContent.sectionsHtml[href] = newHtml;
+          state.hasUnsavedChanges = true; // Mark changes
         }
       });
     },
     // --- END NEW ---
-    // --- NEW: Amendment Filter Action Implementation ---
+    // --- NEW: Comment Actions ---
+    fetchComments: async (legislationIdentifier: string) => {
+      if (get().isLoadingComments) return;
+
+      set(state => {
+        state.isLoadingComments = true;
+        state.commentsError = null;
+      });
+
+      try {
+        const supabase = createClient();
+        // Fetch comments matching the identifier
+        // Ensure the API path and query param name are correct
+        const response = await fetch(`/api/comments?legislation_id=${encodeURIComponent(legislationIdentifier)}`);
+        if (!response.ok) {
+          const errorData = await response.json();
+          throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+        }
+        const fetchedComments: any[] = await response.json(); // Use any[] initially
+
+        // Basic validation/transformation if needed (e.g., parsing dates)
+        const validComments: Comment[] = fetchedComments.map(c => ({
+          ...c, // Spread existing fields
+          // Ensure required fields exist and potentially transform types
+          id: String(c.id), // Ensure ID is string
+          legislation_identifier: String(c.legislation_id), // Map API field to store field if different (using identifier here)
+          mark_id: String(c.mark_id),
+          comment_text: String(c.comment_text),
+          created_at: String(c.created_at),
+          user_id: String(c.user_id),
+          user_email: c.user_email ? String(c.user_email) : undefined,
+          resolved: !!c.resolved_at, // Convert resolved_at timestamp to boolean
+          // Ensure all fields expected by the Comment type are present
+        })).filter(c => c.id && c.mark_id && c.comment_text && c.created_at && c.user_id);
+
+        set(state => {
+          state.comments = validComments;
+          state.isLoadingComments = false;
+        });
+
+      } catch (e) {
+        const error = e instanceof Error ? e : new Error(String(e));
+        console.error("Failed to fetch comments:", error);
+        set(state => {
+          state.commentsError = error.message;
+          state.isLoadingComments = false;
+        });
+      }
+    },
+
+    addComment: (newComment: Comment) => {
+      set((state) => {
+        state.comments.push(newComment);
+      });
+    },
+    setFocusedCommentId: (commentId: string | null) => {
+      set((state) => {
+        state.focusedCommentId = commentId;
+        // Optionally clear mark focus when comment focus changes
+        if (commentId !== null) {
+            state.focusedMarkId = null; 
+        }
+      });
+    },
+    setFocusedMarkId: (markId: string | null) => { // NEW action
+      set((state) => {
+        state.focusedMarkId = markId;
+        // Optionally clear comment focus when mark focus changes
+        if (markId !== null) {
+            state.focusedCommentId = null; 
+        }
+      });
+    },
+    // --- END NEW ---
+    // --- NEW: Amendment Filter Action ---
     toggleShowAmendments: () => {
       set((state) => {
         state.showAmendments = !state.showAmendments;
       });
     },
 
-    // --- Add back internal action to set original content --- 
-    setOriginalContent: (content) => {
-        set((state) => {
-            // Deep copy to prevent mutations affecting the original state
-            state.originalLegislationContent = content ? JSON.parse(JSON.stringify(content)) : null; 
-            // Reset unsaved changes flag when new original content is set
-            state.hasUnsavedChanges = false; 
-        });
+    // --- NEW: Sidebar Action ---
+    toggleSidebar: () => {
+      set((state) => {
+        state.isSidebarCollapsed = !state.isSidebarCollapsed;
+      });
     },
-    // --- End add back --- 
+    // --- END NEW ---
 
-    // --- Add back action to submit changes --- 
+    // --- Add back actions for change tracking & submission ---
+    setOriginalContent: (content: LegislationContent | null) => {
+      set((state) => {
+        state.originalLegislationContent = content 
+            ? JSON.parse(JSON.stringify(content)) // Deep copy
+            : null;
+        state.hasUnsavedChanges = false; // Reset flag when new content is loaded
+      });
+    },
+
     submitChangesForReview: async () => {
       const supabase = createClient(); // Create client instance for this action
       const {
@@ -568,3 +716,23 @@ export const useSelectedTypes = () => useAppStore((state) => state.selectedTypes
 // --- Add back selector for hasUnsavedChanges flag ---
 export const useHasUnsavedChanges = () => useAppStore((state) => state.hasUnsavedChanges);
 // --- End add back ---
+
+// --- NEW: Hooks for comments ---
+export const useComments = () => useAppStore((state) => state.comments);
+export const useIsLoadingComments = () => useAppStore((state) => state.isLoadingComments);
+export const useCommentsError = () => useAppStore((state) => state.commentsError);
+export const useFocusedCommentId = () => useAppStore((state) => state.focusedCommentId); // Hook for focused comment
+export const useFocusedMarkId = () => useAppStore((state) => state.focusedMarkId); // Hook for focused mark
+// --- END NEW ---
+
+// --- NEW: Action Hook for Comments ---
+export const useCommentActions = () => useAppStore((state) => ({
+  fetchComments: state.fetchComments,
+  addComment: state.addComment,
+  setFocusedCommentId: state.setFocusedCommentId,
+  setFocusedMarkId: state.setFocusedMarkId,
+}));
+// --- END NEW ---
+
+// Add selectors for new sidebar state
+export const useIsSidebarCollapsed = () => useAppStore((state) => state.isSidebarCollapsed);

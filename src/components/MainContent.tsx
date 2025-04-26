@@ -1,11 +1,14 @@
 'use client';
 
-import React, { useState } from 'react';
-import { useAppStore, TocItem, LegislationContent } from '@/lib/store/useAppStore'; // Adjust path if needed
+import React, { useState, useEffect, useRef } from 'react';
+import { useAppStore, TocItem, LegislationContent, Comment } from '@/lib/store/useAppStore'; // Adjust path if needed
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
+import CommentDisplaySidebar from './CommentDisplaySidebar'; // Import the new sidebar
 import { Button } from '@/components/ui/button'; // Reverting to standard Shadcn path
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal } from "lucide-react"
+import { Terminal, MessageSquare } from "lucide-react"; // Added MessageSquare icon
+import { useInView } from 'react-intersection-observer'; // Import useInView
+import CommentInputSidebar from './CommentInputSidebar';
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -17,20 +20,90 @@ const generateSafeId = (input: string): string => {
         .replace(/-+/g, '-'); // Replace multiple hyphens with single
 };
 
-export default function MainContent() {
+// Component for rendering each section and handling its visibility
+interface SectionRendererProps {
+  item: TocItem;
+  index: number;
+  sectionHtml: string | null | undefined;
+  onVisible: (id: string) => void; // Callback when section becomes visible
+  updateSectionHtml: (href: string, html: string) => void; // Add this prop
+  onAddCommentTrigger: (markId: string, sectionKey: string) => void; // Add this prop
+}
+
+const SectionRenderer: React.FC<SectionRendererProps> = ({ item, index, sectionHtml, onVisible, updateSectionHtml, onAddCommentTrigger }) => {
+  const sectionId = generateSafeId(item.title || `section-${index}`);
+  const { ref, inView } = useInView({
+      threshold: 0.1, // Trigger when 10% is visible
+      rootMargin: '-10% 0px -50% 0px', // Similar margin to previous attempt
+      // triggerOnce: false // Keep observing
+  });
+
+  useEffect(() => {
+    if (inView) {
+      onVisible(sectionId);
+    }
+  }, [inView, sectionId, onVisible]);
+
+  return (
+    <section
+      ref={ref} // Assign ref from useInView
+      key={`${item.fullHref}-${index}`}
+      id={sectionId}
+      className="legislation-section border-t border-gray-300 dark:border-gray-600 pt-6 scroll-mt-24"
+    >
+      <h2 className="text-xl font-semibold mb-3 text-gray-800 dark:text-gray-200">{item.title}</h2>
+      <div className="prose dark:prose-invert max-w-none">
+        <LegislationEditor
+          content={sectionHtml ?? null} // Default to null if sectionHtml is undefined/null
+          editable={true}
+          onChange={(newHtml) => {
+            // Call the passed update function
+            updateSectionHtml(item.fullHref, newHtml);
+          }}
+          onAddCommentClick={(markId) => onAddCommentTrigger(markId, item.fullHref)}
+          // Pass editor instance up if needed later: onEditorReady={(editor) => setSectionEditor(item.fullHref, editor)}
+        />
+        {!sectionHtml && <p className="text-gray-500 italic">Content loading or not available...</p>}
+      </div>
+    </section>
+  );
+};
+
+// --- NEW: Props for MainContent --- 
+interface MainContentProps {
+  onSectionVisible: (id: string) => void;
+}
+// --- END NEW ---
+
+export default function MainContent({ onSectionVisible }: MainContentProps) { // Accept prop
   const {
     selectedLegislation,
     selectedLegislationContent,
     isLoadingContent,
     updateIntroHtml,
-    updateSectionHtml,
-    hasUnsavedChanges, // Get the flag from the store
-    submitChangesForReview, // Get the action from the store
-    resetContent // Action to discard changes
+    updateSectionHtml, // Now correctly destructured
+    hasUnsavedChanges,
+    submitChangesForReview,
+    resetContent,
+    fetchComments, // Now exists in store
+    comments, // Now exists in store
+    addComment,
+    setFocusedMarkId, // Get the action
   } = useAppStore();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [isCommentSidebarOpen, setIsCommentSidebarOpen] = useState(false); // State for comment sidebar visibility
+  const [showCommentInputFor, setShowCommentInputFor] = useState<string | null>(null); 
+  const [activeSectionKeyForComment, setActiveSectionKeyForComment] = useState<string | null>(null);
+  const mainContentRef = useRef<HTMLDivElement>(null); // Ref for the main scrollable area
+
+  // Fetch comments when legislation changes or sidebar opens
+  useEffect(() => {
+    if (selectedLegislation?.identifier && isCommentSidebarOpen) { // Use identifier
+      fetchComments(selectedLegislation.identifier);
+    }
+  }, [selectedLegislation, isCommentSidebarOpen, fetchComments]);
 
   console.log('[MainContent] Rendering. isLoading:', isLoadingContent, 'Content:', selectedLegislationContent);
 
@@ -66,6 +139,105 @@ export default function MainContent() {
     }
   };
 
+  // Function to scroll to the comment span in the DOM
+  const handleScrollToComment = (commentId: string) => {
+    if (!mainContentRef.current) return;
+
+    // Find the element within the main content area
+    // We query the entire main content area because the comment could be in the intro or any section
+    const commentElement = mainContentRef.current.querySelector(`span[data-comment-id="${commentId}"]`);
+
+    if (commentElement) {
+      commentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Optional: Add a temporary highlight effect (ensure CSS is defined elsewhere)
+      commentElement.classList.add('scroll-target-highlight');
+      setTimeout(() => {
+        commentElement.classList.remove('scroll-target-highlight');
+      }, 2000); // Remove highlight after 2 seconds
+    } else {
+      console.warn(`Could not find comment element with ID: ${commentId}`);
+      // Optionally show a user message if the element isn't found
+    }
+  };
+
+  // NEW: Function to scroll to a mark and set focus
+  const handleScrollToMark = (markId: string) => {
+    console.log(`[MainContent] Scrolling to markId: ${markId}`);
+    setFocusedMarkId(markId); // Set focus in the store
+
+    if (!mainContentRef.current) return;
+    
+    // Find the element using data-mark-id
+    const markElement = mainContentRef.current.querySelector(`span[data-mark-id="${markId}"]`);
+
+    if (markElement) {
+      markElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Optional: Add a temporary highlight effect (ensure .scroll-target-highlight CSS exists)
+      markElement.classList.add('scroll-target-highlight');
+      setTimeout(() => {
+        markElement.classList.remove('scroll-target-highlight');
+      }, 2000); 
+    } else {
+      console.warn(`Could not find mark element with ID: ${markId}`);
+    }
+  };
+
+  // NEW: Function to add comment
+  const handleToolbarAddCommentClick = (markId: string, sectionKey: string) => {
+    console.log(`[MainContent] Add comment triggered for markId: ${markId}, sectionKey: ${sectionKey}`);
+    setShowCommentInputFor(markId);
+    setActiveSectionKeyForComment(sectionKey);
+  };
+
+  // NEW: Function to close comment input
+  const handleCommentInputClose = () => {
+    console.log("[MainContent] Closing comment input sidebar");
+    setShowCommentInputFor(null);
+    setActiveSectionKeyForComment(null);
+  };
+
+  // NEW: Function to submit comment
+  const handleCommentSubmit = async (commentData: { 
+        comment_text: string; 
+        legislation_id: string; // Should match what API/store expects
+        section_key: string; 
+        mark_id: string; 
+    }) => {
+      console.log("[MainContent] Submitting comment via store:", commentData);
+      try {
+          const response = await fetch('/api/comments', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+              },
+              // Ensure body matches API expectation (might need user_id etc added server-side)
+              body: JSON.stringify(commentData), 
+          });
+
+          if (!response.ok) {
+              const errorData = await response.json();
+              throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+          }
+
+          const newComment: Comment = await response.json(); 
+          console.log("[MainContent] Comment submitted successfully, adding to store:", newComment);
+          
+          // Use the Zustand action to add the comment
+          addComment(newComment);
+
+          setSubmitStatus({ type: 'success', message: 'Comment added!'});
+          setTimeout(() => setSubmitStatus(null), 3000);
+          handleCommentInputClose(); // Close input sidebar on success
+
+      } catch (error: any) {
+          console.error("[MainContent] Failed to submit comment:", error);
+          setSubmitStatus({ type: 'error', message: `Comment submission failed: ${error.message}` });
+          // Do not close sidebar on error, let user see message / retry
+          // Re-throw so the input sidebar can potentially catch it too (optional)
+          throw error; 
+      }
+  };
+
   if (isLoadingContent) {
     return (
       <div className="flex-grow p-6 flex items-center justify-center bg-white dark:bg-gray-900">
@@ -92,27 +264,42 @@ export default function MainContent() {
   const { introHtml, toc } = selectedLegislationContent;
 
   return (
-    <div className="flex-grow p-6 overflow-y-auto bg-white dark:bg-gray-900 relative">
+    // Use Flexbox for layout
+    <div className="flex flex-1 h-full overflow-hidden">
+      {/* Main scrollable content area */}
+      <div ref={mainContentRef} className="flex-grow p-6 overflow-y-auto bg-white dark:bg-gray-900 relative scroll-smooth">
 
-      {/* Sticky Header for Title and Actions */}
-      <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 py-4 mb-4 border-b border-gray-200 dark:border-gray-700">
-        <div className="flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 truncate pr-4">{selectedLegislation.title}</h1>
-          {/* Action Buttons */}
-          {selectedLegislation && (
-              <div className="flex items-center space-x-2">
-                 {hasUnsavedChanges && (
-                   <Button variant="outline" onClick={handleDiscard} disabled={isSubmitting} size="sm">
-                      Discard Changes
-                   </Button>
-                 )}
-                 <Button 
-                     onClick={handleSubmit} 
-                     disabled={!hasUnsavedChanges || isSubmitting}
+        {/* Sticky Header for Title and Actions */}
+        <div className="sticky top-0 z-20 bg-white dark:bg-gray-900 py-4 mb-4 border-b border-gray-200 dark:border-gray-700">
+          <div className="flex justify-between items-center">
+            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 truncate pr-4">{selectedLegislation.title}</h1>
+            {/* Action Buttons */}
+            {selectedLegislation && (
+                <div className="flex items-center space-x-2">
+                   {/* Comment Toggle Button */}
+                   <Button
+                     variant="outline"
                      size="sm"
-                     className={hasUnsavedChanges ? "bg-green-600 hover:bg-green-700" : ""}
-                 >
-                     {isSubmitting ? (
+                     onClick={() => setIsCommentSidebarOpen(!isCommentSidebarOpen)}
+                     title={isCommentSidebarOpen ? "Hide Comments" : "Show Comments"}
+                   >
+                     <MessageSquare className="h-4 w-4 mr-1" />
+                     {/* Show comment count - make sure comments is an array */}
+                     {Array.isArray(comments) && comments.length > 0 ? comments.length : ''} 
+                   </Button>
+
+                   {hasUnsavedChanges && (
+                     <Button variant="outline" onClick={handleDiscard} disabled={isSubmitting} size="sm">
+                        Discard Changes
+                     </Button>
+                   )}
+                   <Button
+                       onClick={handleSubmit}
+                       disabled={!hasUnsavedChanges || isSubmitting}
+                       size="sm"
+                       className={hasUnsavedChanges ? "bg-green-600 hover:bg-green-700" : ""}
+                   >
+                       {isSubmitting ? (
                         <>
                           <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -121,12 +308,12 @@ export default function MainContent() {
                           Submitting...
                         </>
                      ) : 'Submit Changes'}
-                 </Button>
-              </div>
-           )}
-        </div>
-        {/* Submission Status Alert */}
-        {submitStatus && (
+                   </Button>
+                </div>
+             )}
+          </div>
+          {/* Submission Status Alert */}
+          {submitStatus && (
              <Alert className={`mt-3 ${submitStatus.type === 'error' ? 'border-red-500 text-red-700 dark:text-red-400 dark:border-red-600' : 'border-green-500 text-green-700 dark:text-green-400 dark:border-green-600'}`}>
               <Terminal className="h-4 w-4" />
               <AlertTitle>{submitStatus.type === 'success' ? 'Success' : 'Error'}</AlertTitle>
@@ -135,104 +322,83 @@ export default function MainContent() {
               </AlertDescription>
             </Alert>
         )}
-      </div>
+        </div>
 
-      {/* Display Introductory Text using Tiptap */}
-      {introHtml !== null ? (
-         <div className="prose dark:prose-invert max-w-none mb-6 legislation-intro">
-           <LegislationEditor 
-             content={introHtml} 
-             editable={true} 
-             onChange={updateIntroHtml} 
-           />
-         </div>
-      ) : (
-        <p className="text-gray-500 dark:text-gray-400 italic mb-6">No introductory text found for this document.</p>
-      )}
-
-      {/* Display Navigable Table of Contents */}
-      {toc && toc.length > 0 && (
-          <details className="mb-8 bg-gray-50 dark:bg-gray-800 rounded border border-gray-200 dark:border-gray-700 sticky top-[88px] z-10" open> {/* Adjusted sticky top */} 
-              <summary className="cursor-pointer p-3 font-semibold text-lg text-gray-800 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-t list-none">
-                  Table of Contents
-              </summary>
-              <ul className="p-4 border-t border-gray-200 dark:border-gray-700 max-h-60 overflow-y-auto">
-                  {toc.map((item: TocItem, index: number) => {
-                      const sectionId = generateSafeId(item.title || `section-${index}`);
-                      const isHeading = item.fullHref.includes('#heading-');
-                      return (
-                          <li key={`${item.fullHref}-${index}`} style={{ marginLeft: `${item.level * 1.5}rem` }} className="mb-1">
-                             {isHeading ? (
-                                <span 
-                                   className="text-sm text-gray-700 dark:text-gray-300 font-semibold"
-                                   title={item.title}
-                                >
-                                   {item.title}
-                                </span>
-                             ) : (
-                                <a
-                                    href={`#${sectionId}`}
-                                    className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-                                    title={`Jump to: ${item.title}`}
-                                >
-                                    {item.title}
-                                </a>
-                             )}
-                          </li>
-                      );
-                   })}
-              </ul>
-          </details>
-      )}
-
-      {/* Display Content Sections */}
-      <div className="legislation-content space-y-6">
-        {toc && toc.length > 0 ? (
-             toc.map((item: TocItem, index: number) => {
-                if (item.fullHref.includes('#heading-')) {
-                    return null; 
-                }
-                const sectionId = generateSafeId(item.title || `section-${index}`);
-                const sectionHtml = selectedLegislationContent.sectionsHtml?.[item.fullHref];
-
-                return (
-                  <section key={`${item.fullHref}-${index}`} id={sectionId} className="legislation-section border-t border-gray-200 dark:border-gray-700 pt-4 scroll-mt-20">
-                      <h2 className="text-xl font-semibold mb-3 text-gray-800 dark:text-gray-200">{item.title}</h2>
-                       <div className="prose dark:prose-invert max-w-none">
-                          <LegislationEditor 
-                             content={sectionHtml} // Pass the section HTML
-                             editable={true} 
-                             onChange={(newHtml) => {
-                                 // Ensure updateSectionHtml exists before calling
-                                 if (updateSectionHtml) {
-                                     updateSectionHtml(item.fullHref, newHtml);
-                                 }
-                             }}
-                          /> 
-                          {!sectionHtml && <p className="text-gray-500 italic">Content loading or not available...</p>}
-                       </div>
-                  </section>
-                );
-            })
+        {/* Display Introductory Text using Tiptap */}
+        {introHtml !== null ? (
+           <div className="prose dark:prose-invert max-w-none mb-6 legislation-intro">
+             <LegislationEditor
+               content={introHtml}
+               editable={true}
+               onChange={updateIntroHtml}
+               onAddCommentClick={(markId) => handleToolbarAddCommentClick(markId, 'intro')}
+             />
+           </div>
         ) : (
-            introHtml === null && <p className="text-gray-500 dark:text-gray-400 italic mt-6">No content sections found for this document.</p>
+          <p className="text-gray-500 dark:text-gray-400 italic mb-6">No introductory text found for this document.</p>
         )}
-      </div>
 
-       {/* Link to original source */}
-       {selectedLegislation && selectedLegislation.href && (
-         <div className="mt-8 pt-4 border-t border-gray-200 dark:border-gray-700 text-center">
-           <a 
-             href={selectedLegislation.href} 
-             target="_blank" 
-             rel="noopener noreferrer"
-             className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-           >
-             View Original Source on legislation.gov.uk
-           </a>
-         </div>
-       )}
+        {/* Display Content Sections */}
+        <div className="legislation-content space-y-6">
+          {toc && toc.length > 0 ? (
+               toc.map((item: TocItem, index: number) => {
+                  if (item.fullHref.includes('#heading-')) {
+                      // Render non-linked headings from TOC for structure
+                       const headingId = generateSafeId(item.title || `heading-${index}`);
+                       return (
+                           <h3 key={`${item.fullHref}-${index}`} id={headingId} className="text-lg font-semibold mt-6 mb-2 text-gray-600 dark:text-gray-400" style={{ marginLeft: `${item.level * 1.5}rem` }}>
+                              {item.title}
+                           </h3>
+                       );
+                  } else {
+                    // Use the correct property name sectionsHtml
+                    const sectionHtml = selectedLegislationContent.sectionsHtml?.[item.fullHref];
+                    return (
+                      <SectionRenderer
+                          key={`${item.fullHref}-${index}`}
+                          item={item}
+                          index={index}
+                          sectionHtml={sectionHtml}
+                          onVisible={onSectionVisible} // Pass down the received prop
+                          updateSectionHtml={updateSectionHtml} // Pass down the function from store
+                          onAddCommentTrigger={handleToolbarAddCommentClick}
+                      />
+                    );
+                  }
+               })
+           ) : (
+             introHtml === null && <p className="text-gray-500 dark:text-gray-400 italic mt-6">No content sections found for this document.</p>
+           )}
+        </div>
+      </div> {/* End Main scrollable content area */}
 
-    </div>
+      {/* Conditional Comment Sidebar */}
+      {isCommentSidebarOpen && (
+        <CommentDisplaySidebar
+          onCardClick={handleScrollToMark}
+        />
+      )}
+
+      {/* Comment Input Sidebar (Rendered on the right) */}
+      {showCommentInputFor && activeSectionKeyForComment && selectedLegislation && (
+          <CommentInputSidebar 
+             markId={showCommentInputFor}
+             legislationId={selectedLegislation.identifier} // Use identifier consistent with fetching
+             sectionKey={activeSectionKeyForComment}
+             onSubmit={handleCommentSubmit}
+             onClose={handleCommentInputClose}
+          />
+      )}
+    </div> // End Flex container
   );
 }
+
+// Remember to add CSS for temporary scroll highlight (e.g., in global.css or similar)
+/* Example:
+.scroll-target-highlight {
+  background-color: rgba(0, 123, 255, 0.2) !important; 
+  transition: background-color 0.3s ease-out;
+  border-radius: 3px;
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.4);
+}
+*/

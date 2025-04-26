@@ -15,7 +15,6 @@ if (!supabaseAnonKey) {
 // This ensures a new client is created for each component instance if needed,
 // though often it's used like a singleton within the browser context.
 export function createClient() {
-  console.log('[supabaseClient] createClient called. URL/Key presence:', !!supabaseUrl, !!supabaseAnonKey); // Log inside the factory too
   return createBrowserClient(supabaseUrl!, supabaseAnonKey!)
 }
 

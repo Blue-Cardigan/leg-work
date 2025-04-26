@@ -32,7 +32,6 @@ export default function UserAuth() {
     // Auth state listener
     const { data: authListener } = supabase.auth.onAuthStateChange(
       (event, session) => {
-        console.log('[UserAuth] Auth state changed:', event, session);
         setUser(session?.user ?? null)
         setError(null) // Clear errors on auth change
         setMessage(null)

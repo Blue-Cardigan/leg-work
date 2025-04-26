@@ -7,13 +7,15 @@ import {
   LegislationItem, // Ensure LegislationItem is exported from store
   // Import the selector hook
   useFilteredLegislationList, 
+  useIsSidebarCollapsed,
 } from '@/lib/store/useAppStore'; 
 // Import Auth components and types
 import UserAuth from './UserAuth';
-import { createClient } from '@/lib/supabaseClient';
-// Correct import for User type
+// Correct import for Supabase client from the local factory function
+import { createClient } from '@/lib/supabaseClient'; 
+// Correct import for User type and other auth types
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'; 
-import { Info, Filter } from 'lucide-react'; // Icon for the prompt and Filter button
+import { Info, Filter, PanelLeftClose, PanelRightClose, ListTree } from 'lucide-react'; // Icon for the prompt and Filter button, and new icons for toggle and ListTree
 import { Button } from '@/components/ui/button'; // Import Button
 import {
   DropdownMenu,
@@ -23,11 +25,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuCheckboxItem,
 } from "@/components/ui/dropdown-menu" // Import Dropdown components
+import TableOfContents from './TableOfContents'; // Import TOC component
 
-export default function LeftSidebar() {
+// --- NEW: Props for LeftSidebar --- 
+interface LeftSidebarProps {
+  activeTocId: string | null; // Receive active ID from parent
+  isTocVisible: boolean; // Receive TOC visibility state
+  toggleTocVisibility: () => void; // Receive TOC toggle handler
+}
+// --- END NEW ---
+
+export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibility }: LeftSidebarProps) { // Accept new props
   // Select necessary state and actions directly from the store
   const isLoadingList = useAppStore((state) => state.isLoadingList);
   const selectedLegislation = useAppStore((state) => state.selectedLegislation);
+  const selectedLegislationContent = useAppStore((state) => state.selectedLegislationContent);
   const searchTerm = useAppStore((state) => state.searchTerm);
   const error = useAppStore((state) => state.error);
   // Access top-level actions
@@ -41,6 +53,11 @@ export default function LeftSidebar() {
   const showAmendments = useAppStore((state) => state.showAmendments);
   const toggleShowAmendments = useAppStore((state) => state.toggleShowAmendments);
   // ----------------------------------
+
+  // --- Sidebar state --- 
+  const isSidebarCollapsed = useIsSidebarCollapsed();
+  const toggleSidebar = useAppStore((state) => state.toggleSidebar); // Select function directly
+  // ---------------------
 
   // --- Use the dedicated selector hook for the filtered list --- 
   const filteredLegislationList = useFilteredLegislationList(); 
@@ -65,7 +82,7 @@ export default function LeftSidebar() {
   */
 
   // Local state for auth status
-  const supabase = createClient();
+  const supabase = createClient(); // Use the factory function
   const [user, setUser] = useState<User | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
@@ -114,110 +131,142 @@ export default function LeftSidebar() {
   const isLoggedIn = !authLoading && !!user;
 
   return (
-    <div className="flex flex-col h-full bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700">
-      {/* Title, Search Input & Filter Dropdown */}
-      <div className="p-4 border-b border-gray-200 dark:border-gray-700">
-        <h2 className="text-lg font-semibold mb-3 text-gray-800 dark:text-gray-200">Draft Legislation</h2>
-        <div className="flex gap-1 items-center">
-          <input
-            type="text"
-            placeholder="Search by title, year, ID..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="flex-grow px-3 py-2 border rounded bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0"
-            disabled={isLoadingList}
-          />
-          {/* --- Filter Dropdown --- */} 
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon" disabled={isLoadingList} className="flex-shrink-0">
-                <Filter className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>Filter Options</DropdownMenuLabel>
-              <DropdownMenuSeparator />
-
-              {/* Show Amendments Toggle */}
-              <DropdownMenuCheckboxItem
-                checked={showAmendments}
-                onCheckedChange={toggleShowAmendments}
-                disabled={isLoadingList}
-              >
-                Show Amendments
-              </DropdownMenuCheckboxItem>
-
-              {/* Type Filters - only show if availableTypes exist */}
-              {availableTypes && availableTypes.length > 0 && (
-                <>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuLabel>Document Types</DropdownMenuLabel>
-                  {availableTypes.map((type: string) => (
-                    <DropdownMenuCheckboxItem
-                      key={type}
-                      checked={selectedTypes?.includes(type) ?? false}
-                      onCheckedChange={(checked) => handleTypeChange(type, !!checked)} // Ensure checked is boolean
-                      disabled={isLoadingList}
-                    >
-                      {type.toUpperCase()}
-                    </DropdownMenuCheckboxItem>
-                  ))}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {/* ------------------------ */} 
-        </div>
+    <div className={`flex flex-col h-full bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-16' : 'w-80'}`}>
+      
+      {/* Header Section with Toggle Button */} 
+      <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+         {!isSidebarCollapsed && <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 truncate">Draft Legislation</h2>}
+         <Button variant="ghost" size="icon" onClick={toggleSidebar} className="ml-auto">
+           {isSidebarCollapsed ? <PanelRightClose className="h-5 w-5" /> : <PanelLeftClose className="h-5 w-5" />}
+         </Button>
       </div>
 
-      {/* List Area */}
-      <div className="flex-grow overflow-y-auto">
-        {isLoadingList && <div className="p-4 text-center text-gray-500 dark:text-gray-400">Loading list...</div>}
-        {error && <div className="p-4 text-center text-red-600 dark:text-red-400">Error loading list: {typeof error === 'string' ? error : 'Unknown error'}</div>}
-        {/* Check filteredLegislationList availability before accessing length */} 
-        {!isLoadingList && !error && (!filteredLegislationList || filteredLegislationList.length === 0) && (
-          <div className="p-4 text-center text-gray-500 dark:text-gray-400">
-             {searchTerm || (availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length) 
-               ? `No documents match "${searchTerm}" ${availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length ? 'with selected types' : ''}${!showAmendments ? ' (excluding amendments)' : ''}.` 
-               : 'No draft documents found.'}
+      {/* Conditional Content: List/Filters or Collapsed View Buttons */}
+      <div className="flex-grow overflow-hidden"> {/* Use hidden to prevent scrollbar flash during transition */}
+        {isSidebarCollapsed ? (
+          // --- Collapsed View: Add TOC Toggle Button --- 
+          <div className="h-full flex flex-col items-center pt-4 space-y-2"> 
+             {/* Add TOC Toggle Button - only show if legislation is selected */}
+             {selectedLegislation && (
+               <Button 
+                 variant={isTocVisible ? "secondary" : "ghost"} // Highlight if TOC is visible
+                 size="icon" 
+                 onClick={toggleTocVisibility} 
+                 title={isTocVisible ? "Hide Table of Contents" : "Show Table of Contents"}
+               >
+                 <ListTree className="h-5 w-5" />
+               </Button>
+             )}
+             {/* Optionally add other icons/buttons here for the collapsed state */}
           </div>
-        )}
-        {/* Check filteredLegislationList availability before mapping */} 
-        {!isLoadingList && !error && filteredLegislationList && filteredLegislationList.length > 0 && (
-          <ul className="divide-y divide-gray-200 dark:divide-gray-700">
-            {filteredLegislationList.map((item: LegislationItem) => ( // Add type to item
-              <li key={item.href} > 
-                <button
-                  onClick={() => setSelectedLegislation(item)}
-                  className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none ${
-                    selectedLegislation?.href === item.href
-                      ? 'bg-blue-100 dark:bg-blue-900 font-semibold'
-                      : ''
-                  }`}
-                  title={`${item.title} (${item.type.toUpperCase()} ${item.year}) - ${item.identifier}`}
-                >
-                  <span className="block font-medium text-gray-800 dark:text-gray-200">{item.title}</span>
-                  <span className="block text-xs text-gray-500 dark:text-gray-400">
-                    {item.type.toUpperCase()} {item.year} - ID: {item.identifier}
-                  </span>
-                </button>
-              </li>
-            ))}
-          </ul>
+        ) : (
+          // --- Expanded View: Show Search, Filters, List --- 
+          <div className="flex flex-col h-full">
+            {/* Search and Filter Section */}
+            <div className="p-4 border-b border-gray-200 dark:border-gray-700">
+              <div className="flex gap-1 items-center">
+                <input
+                  type="text"
+                  placeholder="Search by title, year, ID..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="flex-grow px-3 py-2 border rounded bg-white dark:bg-gray-700 border-gray-300 dark:border-gray-600 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-0"
+                  disabled={isLoadingList}
+                />
+                {/* --- Filter Dropdown --- */} 
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="outline" size="icon" disabled={isLoadingList} className="flex-shrink-0">
+                      <Filter className="h-4 w-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-56">
+                    <DropdownMenuLabel>Filter Options</DropdownMenuLabel>
+                    <DropdownMenuSeparator />
+
+                    {/* Show Amendments Toggle */}
+                    <DropdownMenuCheckboxItem
+                      checked={showAmendments}
+                      onCheckedChange={toggleShowAmendments}
+                      disabled={isLoadingList}
+                    >
+                      Show Amendments
+                    </DropdownMenuCheckboxItem>
+
+                    {/* Type Filters - only show if availableTypes exist */}
+                    {availableTypes && availableTypes.length > 0 && (
+                      <>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuLabel>Document Types</DropdownMenuLabel>
+                        {availableTypes.map((type: string) => (
+                          <DropdownMenuCheckboxItem
+                            key={type}
+                            checked={selectedTypes?.includes(type) ?? false}
+                            onCheckedChange={(checked) => handleTypeChange(type, !!checked)} // Ensure checked is boolean
+                            disabled={isLoadingList}
+                          >
+                            {type.toUpperCase()}
+                          </DropdownMenuCheckboxItem>
+                        ))}
+                      </>
+                    )}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {/* ------------------------ */} 
+              </div>
+            </div>
+
+            {/* List Area */}
+            <div className="flex-grow overflow-y-auto">
+              {isLoadingList && <div className="p-4 text-center text-gray-500 dark:text-gray-400">Loading list...</div>}
+              {error && <div className="p-4 text-center text-red-600 dark:text-red-400">Error loading list: {typeof error === 'string' ? error : 'Unknown error'}</div>}
+              {/* Check filteredLegislationList availability before accessing length */} 
+              {!isLoadingList && !error && (!filteredLegislationList || filteredLegislationList.length === 0) && (
+                <div className="p-4 text-center text-gray-500 dark:text-gray-400">
+                   {searchTerm || (availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length) 
+                     ? `No documents match "${searchTerm}" ${availableTypes && selectedTypes && selectedTypes.length !== availableTypes.length ? 'with selected types' : ''}${!showAmendments ? ' (excluding amendments)' : ''}.` 
+                     : 'No draft documents found.'}
+                </div>
+              )}
+              {/* Check filteredLegislationList availability before mapping */} 
+              {!isLoadingList && !error && filteredLegislationList && filteredLegislationList.length > 0 && (
+                <ul className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {filteredLegislationList.map((item: LegislationItem) => ( // Add type to item
+                    <li key={item.href} > 
+                      <button
+                        onClick={() => setSelectedLegislation(item)}
+                        className={`w-full text-left px-4 py-3 text-sm hover:bg-gray-200 dark:hover:bg-gray-700 focus:outline-none ${
+                          selectedLegislation?.href === item.href
+                            ? 'bg-blue-100 dark:bg-blue-900 font-semibold'
+                            : ''
+                        }`}
+                        title={`${item.title} (${item.type.toUpperCase()} ${item.year}) - ${item.identifier}`}
+                      >
+                        <span className="block font-medium text-gray-800 dark:text-gray-200">{item.title}</span>
+                        <span className="block text-xs text-gray-500 dark:text-gray-400">
+                          {item.type.toUpperCase()} {item.year} - ID: {item.identifier}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
       {/* Footer: Auth Component and Prompt */}
-      <div className="p-2 border-t border-gray-200 dark:border-gray-700 mt-auto bg-gray-50 dark:bg-gray-900/50">
+      <div className={`p-2 border-t border-gray-200 dark:border-gray-700 mt-auto bg-gray-50 dark:bg-gray-900/50 overflow-hidden ${isSidebarCollapsed ? 'opacity-0 h-0 p-0 border-none' : 'opacity-100'} transition-opacity duration-300`}>
         {/* Login Prompt */} 
-        {!authLoading && !isLoggedIn && (
+        {!authLoading && !isLoggedIn && !isSidebarCollapsed && (
             <div className="flex items-start space-x-2 text-xs text-gray-600 dark:text-gray-400 mb-2 p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">
                  <Info className="h-4 w-4 mt-0.5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
                  <span>Log in with your account to propose and track changes to legislation documents.</span>
             </div>
         )}
         {/* Auth Component */} 
-        <div className="flex justify-center">
+        <div className={`flex justify-center ${isSidebarCollapsed ? 'hidden' : ''}`}>
             <UserAuth />
         </div>
       </div>

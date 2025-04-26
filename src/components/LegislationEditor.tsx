@@ -1,14 +1,16 @@
 'use client';
 
 import React from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
+import { useEditor, EditorContent, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
+import Link from '@tiptap/extension-link'; // Import Link extension
 
 // --- Import extensions to customize --- 
 import Paragraph from '@tiptap/extension-paragraph';
 import Heading from '@tiptap/extension-heading';
-import { Mark } from '@tiptap/core'; // Import Mark
+import { Mark, Command } from '@tiptap/core'; // Import more types and Command
+import { useAppStore } from '@/lib/store/useAppStore'; // Import store for actions
 // --- End imports ---
 
 // Basic styling for the editor - adjust as needed
@@ -16,7 +18,7 @@ import './LegislationEditor.css';
 
 // --- Custom Nodes to Preserve Classes --- 
 
-// Extend Paragraph node to preserve class attribute
+// Extend Paragraph node to preserve class and id attributes
 const CustomParagraph = Paragraph.extend({
   addAttributes() {
     return {
@@ -29,6 +31,16 @@ const CustomParagraph = Paragraph.extend({
             return {};
           }
           return { class: attributes.class };
+        },
+      },
+      id: { // Add ID attribute handling
+        default: null,
+        parseHTML: element => element.getAttribute('id'),
+        renderHTML: attributes => {
+          if (!attributes.id) {
+            return {};
+          }
+          return { id: attributes.id };
         },
       },
     };
@@ -49,6 +61,16 @@ const CustomHeading = Heading.extend({
           }
           // Combine with existing attributes like level
           return { class: attributes.class }; 
+        },
+      },
+      id: { // Add ID attribute handling
+        default: null,
+        parseHTML: element => element.getAttribute('id'),
+        renderHTML: attributes => {
+          if (!attributes.id) {
+            return {};
+          }
+          return { id: attributes.id };
         },
       },
     };
@@ -112,24 +134,147 @@ const CustomSpan = Mark.create({
 
 // --- End Custom Mark ---
 
+// --- React Component for Comment Mark Node View ---
+const CommentMarkNodeView: React.FC<NodeViewProps> = ({ node, HTMLAttributes, editor }) => {
+  // Get the specific action from the store
+  const setFocusedMarkId = useAppStore((state) => state.setFocusedMarkId);
+  const markId = node.attrs.markId;
+
+  const handleClick = (event: React.MouseEvent) => {
+    event.stopPropagation();
+    console.log(`[CommentMarkNodeView] Clicked markId: ${markId}`);
+    // Call the action directly (Zustand ensures it exists if selected)
+    setFocusedMarkId(markId); 
+
+    // Optional: Bring editor focus back if needed
+    // editor.view.focus();
+  };
+
+  return (
+    <NodeViewWrapper 
+      as="span" 
+      onClick={handleClick} 
+      className="comment-highlight"
+      data-mark-id={markId}
+      {...HTMLAttributes}
+    >
+      {/* This renders the content *inside* the mark */}
+      {/* Tiptap handles rendering the actual content here */}
+    </NodeViewWrapper>
+  );
+};
+
+// --- Custom Mark for Comments ---
+interface CommentMarkOptions {}
+
+declare module '@tiptap/core' {
+  interface Commands<ReturnType> {
+    commentMark: {
+      setCommentMark: (markId: string) => ReturnType;
+      toggleCommentMark: (markId: string) => ReturnType;
+      unsetCommentMark: () => ReturnType;
+    }
+  }
+}
+
+// Ensure Command type is used for Tiptap command functions
+const CommentMark = Mark.create<CommentMarkOptions>({
+  name: 'commentMark',
+  group: 'inline',
+  inline: true,
+  inclusive: true,
+  excludes: '',
+
+  addAttributes() {
+    return {
+      markId: {
+        default: null,
+        parseHTML: element => element.getAttribute('data-mark-id'),
+        renderHTML: attributes => ({ 'data-mark-id': attributes.markId }),
+      },
+    };
+  },
+
+  parseHTML() {
+    return [{ tag: 'span[data-mark-id]', getAttrs: node => ({ markId: (node as HTMLElement).getAttribute('data-mark-id') }) }];
+  },
+
+  renderHTML({ mark, HTMLAttributes }) {
+    // Ensure data-mark-id is part of the attributes object passed to the final span
+    const finalAttributes = {
+      ...HTMLAttributes, // Include any other attributes Tiptap provides
+      'data-mark-id': mark.attrs.markId, // Correct: Access attrs from 'mark'
+    };
+    // The NodeView will handle the interactive part, but Tiptap needs this basic render.
+    return ['span', finalAttributes, 0]; // 0 means render the content inside the span
+  },
+
+  addNodeView() {
+    return ReactNodeViewRenderer(CommentMarkNodeView);
+  },
+
+  addCommands() {
+    return {
+      setCommentMark: (markId: string): Command => ({ commands }) => {
+        return commands.setMark(this.type, { markId });
+      },
+      unsetCommentMark: (): Command => ({ commands }) => {
+        return commands.unsetMark(this.type);
+      },
+      toggleCommentMark: (markId: string): Command => ({ commands }) => {
+        if (!markId) {
+            console.error("toggleCommentMark requires a markId");
+            return false;
+        }
+        // Let Tiptap infer the MarkType for toggleMark
+        // const type: MarkType = this.type;
+        return commands.toggleMark(this.type, { markId });
+      },
+    };
+  },
+});
+// --- End Custom Mark for Comments ---
+
 interface LegislationEditorProps {
   content: string | null; // Accept HTML string or null
   editable?: boolean; // Make editable controllable
   onChange?: (newContent: string) => void; // Add onChange prop
+  // Add the callback prop for comment initiation
+  onAddCommentClick?: (markId: string) => void;
 }
 
-const LegislationEditor: React.FC<LegislationEditorProps> = ({ content, editable = true, onChange }) => { // Default editable to true
+const LegislationEditor: React.FC<LegislationEditorProps> = ({ 
+    content, 
+    editable = true, 
+    onChange, 
+    onAddCommentClick // Destructure the prop
+}) => { // Default editable to true
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
         // Disable default paragraph and heading to use our custom ones
-        paragraph: false, 
-        heading: false,   
+        paragraph: false,
+        heading: false,
+        // Link is handled by the separate Link.configure below
+        // link: false, // This option doesn't exist here
       }),
       CustomParagraph,  // Use custom paragraph
       CustomHeading,    // Use custom heading
       CustomSpan,       // Use custom span mark
-      // Add more extensions here as needed (e.g., Table, Link, Image)
+      CommentMark,      // Add the CommentMark extension
+      Link.configure({ // Configure the Link extension
+        // Keep attributes like href, target, rel - Rely on default parsing + HTMLAttributes below
+        // keepAttributes: true, // This option doesn't exist here
+        autolink: true, // Autolink URLs typed/pasted
+        openOnClick: false, // Don't navigate when clicking links in the editor
+        linkOnPaste: true, // Convert pasted URLs to links
+        HTMLAttributes: {
+           // Add target and rel attributes to ensure external links open safely
+           target: '_blank',
+           rel: 'noopener noreferrer nofollow',
+        },
+      }),
+      // Add more extensions here as needed (e.g., Table, Image)
     ],
     content: content || '', // Use provided HTML or empty string
     editable: editable, // Set editor editability
@@ -156,8 +301,10 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({ content, editable
 
   return (
     <div className="tiptap-editor-wrapper border border-gray-300 dark:border-gray-600 rounded">
-      {/* Render toolbar only if editable */} 
-      {editable && <LegislationToolbar editor={editor} />} 
+      {/* Pass the callback down to the toolbar */}
+      {editable && onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={onAddCommentClick} />} 
+      {/* Conditionally render toolbar *without* comment button if callback not provided */}
+      {editable && !onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={() => console.warn("onAddCommentClick not provided to LegislationEditor")} />} 
       <EditorContent editor={editor} />
     </div>
   );

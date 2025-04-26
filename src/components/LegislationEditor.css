@@ -37,4 +37,46 @@
    /* margin-top: initial; */
    /* margin-bottom: initial; */
    /* etc. */
+}
+
+/* Styles for the Legislation Editor */
+.ProseMirror {
+  padding: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  min-height: 400px; /* Adjust as needed */
+  background-color: #fff;
+  font-family: serif; /* Or a suitable legal font */
+  line-height: 1.6;
+}
+
+/* Add more specific styles for headings, paragraphs, lists, etc. */
+.ProseMirror h1 {
+  font-size: 1.8em;
+  margin-bottom: 1em;
+}
+
+.ProseMirror h2 {
+  font-size: 1.5em;
+  margin-bottom: 0.8em;
+}
+
+.ProseMirror p {
+  margin-bottom: 0.5em;
+}
+
+/* Style for the comment mark/highlight */
+.comment-highlight {
+  background-color: rgba(255, 215, 0, 0.3); /* Light gold highlight */
+  border-bottom: 1px dashed orange;
+  cursor: pointer; /* Indicate interactivity */
+}
+
+/* Placeholder styling */
+.ProseMirror p.is-editor-empty:first-child::before {
+    color: #adb5bd;
+    content: attr(data-placeholder);
+    float: left;
+    height: 0;
+    pointer-events: none;
 } 
