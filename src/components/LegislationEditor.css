@@ -1,0 +1,40 @@
+/* Basic Tiptap Editor Styling */
+.tiptap-editor-wrapper .ProseMirror {
+  /* Add some padding */
+  padding: 0.5rem;
+  /* Set a minimum height */
+  min-height: 100px;
+  /* Basic text styling (can be overridden by Tailwind Prose) */
+  color: inherit; /* Inherit color from parent */
+}
+
+.ProseMirror:focus {
+  outline: none;
+}
+
+/* Add more specific styling for elements like p, h1, h2, ul, ol, etc. if needed */
+/* For example: */
+.tiptap-editor-wrapper .ProseMirror p {
+  margin-bottom: 0.75em;
+}
+
+.tiptap-editor-wrapper .ProseMirror h1,
+.tiptap-editor-wrapper .ProseMirror h2,
+.tiptap-editor-wrapper .ProseMirror h3 {
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.tiptap-editor-wrapper .ProseMirror h1 { font-size: 1.875rem; /* Like text-3xl */ }
+.tiptap-editor-wrapper .ProseMirror h2 { font-size: 1.5rem; /* Like text-2xl */ }
+.tiptap-editor-wrapper .ProseMirror h3 { font-size: 1.25rem; /* Like text-xl */ }
+
+/* Remove Tailwind Prose default styling within the editor if it conflicts */
+.tiptap-editor-wrapper .ProseMirror > * {
+   /* Reset properties affected by Tailwind Prose if needed */
+   /* margin-top: initial; */
+   /* margin-bottom: initial; */
+   /* etc. */
+} 

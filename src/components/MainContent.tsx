@@ -1,19 +1,8 @@
 'use client';
 
 import React from 'react';
-import { useAppStore, TocItem } from '@/lib/store/useAppStore'; // Adjust path if needed
-import sanitizeHtml from 'sanitize-html';
-
-// Allowed tags and attributes for sanitized intro text
-const sanitizeOptions = {
-    allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'h3', 'p', 'ul', 'ol', 'li', 'blockquote', 'a', 'strong', 'em', 'u', 'span', 'br', 'hr', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'section']),
-    allowedAttributes: {
-        ...sanitizeHtml.defaults.allowedAttributes,
-        a: ['href', 'name', 'target', 'id'],
-        img: ['src', 'srcset', 'alt', 'title', 'width', 'height', 'loading'],
-        '*': ['class', 'id', 'style'] // Allow class, id, style globally
-    },
-};
+import { useAppStore, TocItem, LegislationContent } from '@/lib/store/useAppStore'; // Adjust path if needed
+import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -26,7 +15,13 @@ const generateSafeId = (input: string): string => {
 };
 
 export default function MainContent() {
-  const { selectedLegislation, selectedLegislationContent, isLoadingContent } = useAppStore();
+  const { 
+    selectedLegislation, 
+    selectedLegislationContent, 
+    isLoadingContent,
+    updateIntroHtml,
+    updateSectionHtml
+  } = useAppStore();
 
   console.log('[MainContent] Rendering. isLoading:', isLoadingContent, 'Content:', selectedLegislationContent);
 
@@ -54,17 +49,21 @@ export default function MainContent() {
   }
 
   const { introHtml, toc } = selectedLegislationContent;
-  const cleanIntroHtml = introHtml ? sanitizeHtml(introHtml, sanitizeOptions) : null;
 
   return (
     <div className="flex-grow p-6 overflow-y-auto bg-white dark:bg-gray-900">
       <h1 className="text-2xl font-bold mb-4 text-gray-900 dark:text-gray-100">{selectedLegislation.title}</h1>
 
-      {/* Display Introductory Text */}
-      {cleanIntroHtml ? (
-         <div className="prose dark:prose-invert max-w-none mb-6 legislation-intro" dangerouslySetInnerHTML={{ __html: cleanIntroHtml }} />
+      {/* Display Introductory Text using Tiptap */}
+      {introHtml !== null ? (
+         <div className="prose dark:prose-invert max-w-none mb-6 legislation-intro">
+           <LegislationEditor 
+             content={introHtml} 
+             editable={true} 
+             onChange={updateIntroHtml} 
+           />
+         </div>
       ) : (
-        introHtml === null &&
         <p className="text-gray-500 dark:text-gray-400 italic mb-6">No introductory text found for this document.</p>
       )}
 
@@ -116,20 +115,26 @@ export default function MainContent() {
                 }
                 const sectionId = generateSafeId(item.title || `section-${index}`);
                 const sectionHtml = selectedLegislationContent.sectionsHtml?.[item.fullHref];
-                const displayHtml = sectionHtml ? sanitizeHtml(sectionHtml, sanitizeOptions) : '<p class="text-gray-500 italic">Content loading or not available...</p>';
 
                 return (
                   <section key={item.fullHref} id={sectionId} className="legislation-section border-t border-gray-200 dark:border-gray-700 pt-4 scroll-mt-20">
                       <h2 className="text-xl font-semibold mb-3 text-gray-800 dark:text-gray-200">{item.title}</h2>
-                       <div
-                          className="prose dark:prose-invert max-w-none"
-                          dangerouslySetInnerHTML={{ __html: displayHtml /* Use actual sanitized content or placeholder */ }}
-                       />
+                       {/* Use Tiptap Editor for section content */}
+                       <div className="prose dark:prose-invert max-w-none">
+                          <LegislationEditor 
+                             content={sectionHtml} 
+                             editable={true} 
+                             onChange={(newHtml) => updateSectionHtml(item.fullHref, newHtml)}
+                          /> 
+                          {/* Fallback if sectionHtml is null/undefined initially */}
+                          {!sectionHtml && <p className="text-gray-500 italic">Content loading or not available...</p>}
+                       </div>
                   </section>
                 );
             })
         ) : (
-            !cleanIntroHtml && <p className="text-gray-500 dark:text-gray-400 italic mt-6">No content sections found for this document.</p>
+             // Update condition to check introHtml directly
+            introHtml === null && <p className="text-gray-500 dark:text-gray-400 italic mt-6">No content sections found for this document.</p>
         )}
       </div>
 

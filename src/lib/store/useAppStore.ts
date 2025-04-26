@@ -64,6 +64,10 @@ interface AppState {
   // --- NEW: Chat Actions ---
   sendChatMessage: (messageText: string) => Promise<void>;
   // --- END NEW ---
+  // --- NEW: Editor Update Actions ---
+  updateIntroHtml: (newHtml: string) => void;
+  updateSectionHtml: (href: string, newHtml: string) => void;
+  // --- END NEW ---
 }
 
 // Define the actions available in the store - REMOVED AppActions interface
@@ -277,6 +281,22 @@ export const useAppStore = create(
         });
       }
     },
+    // --- END NEW ---
+    // --- NEW: Editor Update Actions Implementation ---
+    updateIntroHtml: (newHtml: string) => {
+      set((state) => {
+        if (state.selectedLegislationContent) {
+          state.selectedLegislationContent.introHtml = newHtml;
+        }
+      });
+    },
+    updateSectionHtml: (href: string, newHtml: string) => {
+      set((state) => {
+        if (state.selectedLegislationContent?.sectionsHtml) {
+          state.selectedLegislationContent.sectionsHtml[href] = newHtml;
+        }
+      });
+    }
     // --- END NEW ---
   }))
 );
