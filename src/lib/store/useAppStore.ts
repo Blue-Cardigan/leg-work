@@ -161,6 +161,7 @@ interface AppState {
   setRightSidebarContent: (contentType: 'chat' | 'comments') => void;
   toggleRightSidebar: () => void; // NEW: Action signature
   applySuggestion: (originalText: string, suggestedText: string) => void; // <-- NEW ACTION SIGNATURE
+  setSubmitStatusDirectly: (status: { type: 'success' | 'error'; message: string } | null, isSubmittingValue?: boolean) => void; // <-- NEW ACTION SIGNATURE
   // --- END NEW ---
 }
 
@@ -688,47 +689,41 @@ export const useAppStore = create(
         hasUnsavedChanges
       } = get();
 
-      // Check if initial content was ever loaded
+      // Use the new action for setting status internally as well for consistency
+      const setStatus = get().setSubmitStatusDirectly;
+
       if (initialFullDocumentHtml === null && selectedLegislation) {
          console.error("Submit Error: Initial content was never loaded or failed to load.");
-         set({ submitStatus: { type: 'error', message: 'Cannot submit: Initial content missing.'}, isSubmitting: false });
-         setTimeout(() => set({ submitStatus: null }), 5000);
+         setStatus({ type: 'error', message: 'Cannot submit: Initial content missing.'}, false);
+         setTimeout(() => setStatus(null), 5000);
          return { success: false, error: "Cannot submit: Initial content missing." };
       }
 
-      // Check for actual changes relative to the initially loaded state
-      // Note: hasUnsavedChanges flag is still useful for UI indication,
-      // but this check prevents submitting if the user reverted back to original.
       if (fullDocumentHtml === initialFullDocumentHtml) {
         console.log("No effective changes compared to initial version.");
-        set({ submitStatus: { type: 'success', message: 'No changes from original version.'}, isSubmitting: false });
-        setTimeout(() => set({ submitStatus: null }), 3000);
-        // Resetting hasUnsavedChanges as there's nothing to save
-        set({ hasUnsavedChanges: false });
+        setStatus({ type: 'success', message: 'No changes from original version.'}, false);
+        setTimeout(() => setStatus(null), 3000);
+        set((state) => { state.hasUnsavedChanges = false; }); // Also reset flag here
         return { success: true, error: "No changes from original version." };
       }
 
-
       if (!selectedLegislation || fullDocumentHtml === null) {
-        // This check might be redundant now due to initialFullDocumentHtml check, but keep for safety
         console.error("Submit Error: Missing required data.", { selectedLegislation, fullDocumentHtml });
-        set({ submitStatus: { type: 'error', message: 'Missing legislation data or current content.'}, isSubmitting: false });
-        setTimeout(() => set({ submitStatus: null }), 5000);
+        setStatus({ type: 'error', message: 'Missing legislation data or current content.'}, false);
+        setTimeout(() => setStatus(null), 5000);
         return { success: false, error: "Cannot submit: Missing current or original legislation data." };
       }
 
-      // Get user ID
-      const { data: { user }, error: userError } = await supabase.auth.getUser(); // Rely on server session handling if possible
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
       if (userError || !user) {
           console.error("Submit changes failed: User not authenticated.", userError);
           const message = `User not authenticated: ${userError?.message || 'Please log in.'}`;
-          set({ submitStatus: { type: 'error', message }, isSubmitting: false });
-          setTimeout(() => set({ submitStatus: null }), 5000);
+          setStatus({ type: 'error', message }, false);
+          setTimeout(() => setStatus(null), 5000);
           return { success: false, error: message };
       }
       const userId = user.id;
 
-      // Prepare the payload for the API
       const payload = {
         identifier: selectedLegislation.identifier,
         title: selectedLegislation.title, // Send title
@@ -736,10 +731,10 @@ export const useAppStore = create(
         proposedHtml: fullDocumentHtml, // Send the current HTML
       };
 
-      set({ isSubmitting: true, submitStatus: null });
+      setStatus(null, true); // Set submitting true, clear status before fetch
+
       try {
         console.log(`[AppStore] Submitting changes for ${payload.identifier} by user ${userId}.`);
-
         const response = await fetch(`/api/legislation/${payload.identifier}/submit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -748,40 +743,42 @@ export const useAppStore = create(
 
         if (!response.ok) {
           const errorData = await response.json();
-          console.error("Error submitting changes via API:", errorData);
           throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
         }
 
         const result = await response.json();
 
-        // Successfully submitted: Reset flag
         set(state => {
-            state.hasUnsavedChanges = false; // Reset flag after successful submit
-            state.isSubmitting = false;
-            state.submitStatus = { type: 'success', message: result.message || 'Changes submitted successfully!' };
-            // IMPORTANT: We might need to update `initialFullDocumentHtml` here if the workflow
-            // assumes the newly submitted version becomes the new "base" for the *next* edit.
-            // Or, refetching pending changes might handle this implicitly. Let's leave it for now.
+            state.hasUnsavedChanges = false;
+            // Status and submitting flag handled by setStatus below
         });
-        setTimeout(() => set({ submitStatus: null }), 3000);
+        setStatus({ type: 'success', message: result.message || 'Changes submitted successfully!' }, false);
+        setTimeout(() => setStatus(null), 3000);
 
         console.log("Changes submitted successfully via API.");
-        // Consider refetching pending changes here if needed: get().fetchAllChanges();
         return { success: true };
 
       } catch (err) {
         const message = err instanceof Error ? err.message : "An unknown error occurred during submission.";
         console.error("Submission failed:", message);
-        set(state => {
-            state.isSubmitting = false; // Ensure submitting is false on error
-            state.submitStatus = { type: 'error', message };
-        });
-         // Clear status after delay
-        setTimeout(() => set({ submitStatus: null }), 5000);
+        setStatus({ type: 'error', message }, false); // Set error status, submitting false
+        setTimeout(() => setStatus(null), 5000);
         return { success: false, error: message };
       }
     },
-    // --- End add back --- 
+    // --- END NEW ACTION ---
+
+    // --- NEW ACTION IMPLEMENTATION ---
+    setSubmitStatusDirectly: (status, isSubmittingValue) => {
+        set(state => {
+            state.submitStatus = status;
+            // Only update isSubmitting if a boolean value is explicitly provided
+            if (typeof isSubmittingValue === 'boolean') {
+                state.isSubmitting = isSubmittingValue;
+            }
+        });
+    },
+    // --- END NEW ACTION ---
 
     // --- Add state for comment sidebar visibility ---
     isCommentSidebarOpen: false,

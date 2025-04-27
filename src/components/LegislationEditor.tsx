@@ -7,6 +7,7 @@ import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import Link from '@tiptap/extension-link'; // Import Link extension
 import { Decoration, DecorationSet } from 'prosemirror-view'; // Import ProseMirror decorations
 import { Node as ProseMirrorNode } from 'prosemirror-model'; // Import Node type
+import { DOMParser } from 'prosemirror-model'; // Import DOMParser
 
 // --- Import extensions to customize --- 
 import Paragraph from '@tiptap/extension-paragraph';
@@ -276,94 +277,116 @@ interface LegislationEditorProps {
 // --- Helper: Map Plain Text Char Index (from textBetween) to ProseMirror Pos ---
 // Revised helper using textBetween - Requires the Doc object
 const mapPmCharIndexToPos = (doc: ProseMirrorNode, targetIndex: number, docTextCache: string, assoc: -1 | 1 = 1): number | null => {
-    // Use pre-calculated docText from textBetween for efficiency
     const docText = docTextCache;
-    // console.log(`mapPmCharIndexToPos: Doc text length: ${docText.length}, targetIndex: ${targetIndex}`);
-    // console.log(`mapPmCharIndexToPos: Doc text sample: "${docText.substring(0, 200)}"`);
 
-
+    // --- Initial Boundary Checks ---
     if (targetIndex < 0 || targetIndex > docText.length) {
-        console.warn(`[mapPmCharIndexToPos] targetIndex ${targetIndex} is out of bounds (docText length: ${docText.length})`);
-        return null;
+        console.warn(`[mapPmCharIndexToPos] targetIndex ${targetIndex} is out of bounds (docText length: ${docText.length}). Clamping or returning null.`);
+        // Option 1: Return null if strictly out of bounds
+        // return null;
+        // Option 2: Clamp to valid range (might be better for robustness)
+        targetIndex = Math.max(0, Math.min(targetIndex, docText.length));
+        if (targetIndex === docText.length && assoc === -1) {
+            // If targeting *after* the last char, use doc end size
+             return doc.content.size;
+        }
+         if (targetIndex === 0 && assoc === 1) {
+             // If targeting *before* the first char, use 0
+             return 0;
+         }
+         // Continue with clamped value for other cases
     }
-    if (targetIndex === docText.length) {
-         // If targeting the very end, return the end position of content
-         return doc.content.size;
-    }
+    // --- End Boundary Checks ---
 
-    let pmPos = 0; // Tracks ProseMirror position
-    let textCharCount = 0; // Tracks characters in text nodes corresponding to docText
+
+    let pmPos = 0; // Tracks ProseMirror position (start of current node)
+    let textCharCount = 0; // Tracks characters *including* separators counted so far
     const blockSeparator = '\uFFFC'; // Must match separator used in textBetween call
+    let foundPos: number | null = null;
 
-    // We need to correlate docText index with ProseMirror position
-    // Iterate through the document nodes
-     let foundPos: number | null = null;
-     doc.descendants((node, pos) => {
+    doc.descendants((node, pos) => {
         if (foundPos !== null) return false; // Stop if found
 
         if (node.isText) {
             const nodeText = node.textContent;
-            const nodeSize = nodeText.length; // Use actual text content length
-            for (let i = 0; i < nodeSize; i++) {
-                 // Check if the current character in the node corresponds to the targetIndex in docText
-                 if (textCharCount === targetIndex) {
-                      // Found the character. Position is the start of the text node + index within node
+            const nodeSize = nodeText.length;
+            // Check if the target index falls *within* this text node's range in the overall docText
+            const rangeStart = textCharCount;
+            const rangeEnd = textCharCount + nodeSize;
 
-                      // Adjust based on association:
-                      // A position *before* character `i` is `pos + i`.
-                      // A position *after* character `i` is `pos + i + 1`.
-                      if (assoc === 1) {
-                           foundPos = pos + i; // Position before character
-                      } else { // assoc === -1
-                           foundPos = pos + i + 1; // Position after character
-                      }
-                      return false; // Stop descendants traversal
-                 }
-                 textCharCount++;
+            if (targetIndex >= rangeStart && targetIndex < rangeEnd) {
+                // Target is within this text node
+                const indexWithinNode = targetIndex - rangeStart;
+                // assoc = 1 (forward): position *before* the character at indexWithinNode -> pos + indexWithinNode
+                // assoc = -1 (backward): position *after* the character at indexWithinNode -> pos + indexWithinNode + 1
+                foundPos = pos + indexWithinNode + (assoc === 1 ? 0 : 1);
+                // console.log(`[mapPmCharIndexToPos] Found in text node "${nodeText.substring(0,10)}...". Target ${targetIndex}, range ${rangeStart}-${rangeEnd}, indexInNode ${indexWithinNode}, assoc ${assoc} -> pos ${foundPos}`);
+                return false; // Stop traversal
             }
-        } else if (node.isBlock && pmPos > 0) {
-             // Check if the previous node ended at the expected position for a block separator in docText
-             // Need to handle potential multiple separators if blocks are adjacent
-             let blockSeparatorCount = 0;
-             while(docText.startsWith(blockSeparator, textCharCount)) {
-                 textCharCount += blockSeparator.length;
-                 blockSeparatorCount++;
-             }
+            textCharCount += nodeSize; // Advance count by node's text length
 
-             if (blockSeparatorCount > 0) {
-                 // Check again if the target is now matched right after separator(s)
-                 if (textCharCount === targetIndex && assoc === 1) {
-                       // Position at the start of the current block node
-                       foundPos = pos;
-                       return false;
-                 }
-             }
+        } else if (node.isBlock) {
+             // Check if a block separator exists *after* this block node in the docText stream
+             // Note: textBetween adds separators *between* blocks.
+             // We only increment textCharCount if a separator *actually exists* at this position in docText.
+             // The check needs to happen based on the *start* of the *next* node or the overall structure.
+             // Let's refine the separator handling: count separators *between* nodes.
+
+             // More reliable: Check if the *current* position in docText corresponds to a separator
+             // that *should* be there based on the structure. textBetween adds ONE separator between adjacent blocks.
+            if (pos > 0) { // Don't add separator before the very first node
+                // Determine if the *previous* node sibling ended right before this one, implying a separator *should* exist.
+                // This gets complex. Let's trust textCharCount increments based on text nodes and separators found in the string.
+
+                // Simpler: If the current character(s) in docText ARE the separator...
+                if (docText.startsWith(blockSeparator, textCharCount)) {
+                    const separatorStart = textCharCount;
+                    const separatorEnd = textCharCount + blockSeparator.length;
+
+                    if (targetIndex >= separatorStart && targetIndex < separatorEnd) {
+                        // Target index falls *within* the block separator character itself.
+                        // Decide where to place the position: typically at the start or end of the block boundary.
+                        // assoc = 1 (forward): position at the start of the *current* block node -> pos
+                        // assoc = -1 (backward): position at the end of the *previous* node structure (tricky), often map to 'pos' as well? Or pos-1? Let's try 'pos'.
+                        foundPos = pos;
+                        // console.log(`[mapPmCharIndexToPos] Found in block separator. Target ${targetIndex}, range ${separatorStart}-${separatorEnd}, assoc ${assoc} -> pos ${foundPos}`);
+                        return false;
+                    }
+                     // If not targeting the separator itself, just advance the count
+                     textCharCount += blockSeparator.length;
+                }
+            }
         }
-         pmPos = pos + node.nodeSize; // Update position for next node check
-         return true; // Continue
+         // If node is not text and not block, or is a block but separator wasn't targeted,
+         // just continue traversal. pmPos updates implicitly via `pos`.
+
+        return true; // Continue descending
     });
 
 
     // If targetIndex is the very end of the text after traversal
     if (foundPos === null && targetIndex === textCharCount) {
+         // This means the target is immediately after the last character processed.
+         // Return the end position of the document content.
          foundPos = doc.content.size;
+          // console.log(`[mapPmCharIndexToPos] Target ${targetIndex} is at end of text. Returning doc size ${foundPos}`);
     }
 
 
      if (foundPos === null) {
-         console.warn(`[mapPmCharIndexToPos] Failed to map targetIndex ${targetIndex}. Max textCharCount was ${textCharCount}. Doc size: ${doc.content.size}, Text Length: ${docText.length}`);
-         // Fallback: Try resolving position directly? (Often inaccurate for text indices)
-         // try {
-         //     // Resolve position is difficult without knowing the exact text node
-         //     // foundPos = doc.resolve(targetIndex).pos; // Very approximate fallback
-         //     // console.log(`[mapPmCharIndexToPos] Fallback resolve gives: ${foundPos}`);
-         // } catch(e){
-         //     console.error("[mapPmCharIndexToPos] Fallback resolve failed", e);
-         // }
+         console.warn(`[mapPmCharIndexToPos] Failed to map targetIndex ${targetIndex}. Max textCharCount reached: ${textCharCount}. Doc size: ${doc.content.size}, Text Length: ${docText.length}`);
+         // Fallback: maybe return doc size or 0 depending on target? Or null?
+         // Returning null is safer to indicate failure.
+         return null;
+
      } else if (foundPos > doc.nodeSize) {
          console.warn(`[mapPmCharIndexToPos] Calculated position ${foundPos} exceeds document size ${doc.nodeSize}. Clamping. targetIndex: ${targetIndex}`);
          foundPos = doc.nodeSize; // Clamp to max valid position
+     } else if (foundPos < 0) {
+          console.warn(`[mapPmCharIndexToPos] Calculated position ${foundPos} is negative. Clamping to 0. targetIndex: ${targetIndex}`);
+          foundPos = 0; // Clamp to min valid position
      }
+
 
     return foundPos;
 };
@@ -389,6 +412,10 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
 }) => { // Default editable to true
   // Initialize diff-match-patch instance
   const dmp = useMemo(() => new diff_match_patch(), []);
+
+  // --- NEW: State for debounced HTML for diffing --- 
+  const [debouncedCurrentHtml, setDebouncedCurrentHtml] = useState<string | null>(null);
+  const DEBOUNCE_DELAY = 500; // milliseconds
 
   const focusedMarkId = useAppStore((state) => state.focusedMarkId); // Get focused ID
 
@@ -428,7 +455,16 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     // Call onChange when content updates
     onUpdate: ({ editor }) => {
       if (onChange) {
-        onChange(editor.getHTML());
+        const newHtml = editor.getHTML();
+        onChange(newHtml);
+         // --- Update local state for diffing IMMEDIATELY when editing ---
+         // Only do this if we are *in* edit mode. If in 'changes' mode,
+         // currentHtmlForDiff should come from the parent (finalProposedHtml).
+         if (editable) { // Check if editor is actually editable right now
+            // No debounce needed here, as this state is only *read* after debounce effect below
+            // We want the diff calculation to eventually use the latest edited state.
+            setDebouncedCurrentHtml(newHtml); // Update immediately for potential diff calc
+         }
       }
     },
     // --- Call onEditorReady when the editor is created ---
@@ -442,70 +478,106 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     immediatelyRender: false,
   });
 
-  // --- NEW: Memoize the calculation of insertion ranges ---
+  // --- Effect to handle prop changes for currentHtmlForDiff (for non-edit modes) ---
+  useEffect(() => {
+      // If the editor is NOT editable (e.g., 'view' or 'changes' mode),
+      // the `currentHtmlForDiff` prop dictates what should be diffed against.
+      if (!editable && currentHtmlForDiff !== debouncedCurrentHtml) {
+         console.log("[LegislationEditor Effect] Non-editable mode: Syncing debouncedCurrentHtml from prop.");
+         setDebouncedCurrentHtml(currentHtmlForDiff ?? null);
+      }
+      // If the editor *is* editable, `debouncedCurrentHtml` is updated via `onUpdate`.
+      // We don't need a debounce timer here anymore, the diff calculation itself uses the state.
+  }, [editable, currentHtmlForDiff, debouncedCurrentHtml]);
+  // --- END Effect ---
+
+  // --- Memoize the calculation of insertion ranges ---
   const insertionRanges = useMemo<{ from: number; to: number }[]>(() => {
     console.log('[LegislationEditor useMemo] Recalculating insertion ranges...');
-    if (!editor || !baseHtmlForDiff || !currentHtmlForDiff || baseHtmlForDiff === currentHtmlForDiff) {
-        console.log('[LegislationEditor useMemo] Skipping calculation (editor/props missing or identical).');
+    // Use debouncedCurrentHtml for comparison
+    if (!editor || !editor.schema || !baseHtmlForDiff || debouncedCurrentHtml === null || baseHtmlForDiff === debouncedCurrentHtml) {
+        console.log('[LegislationEditor useMemo] Skipping calculation (editor/schema/props missing or identical). Base:', !!baseHtmlForDiff, 'Debounced:', debouncedCurrentHtml !== null, 'Identical:', baseHtmlForDiff === debouncedCurrentHtml);
         return []; // No ranges if no diff needed or editor not ready
     }
 
-    const doc = editor.state.doc;
-    const schema = editor.state.schema; // Get schema from editor state
+    // Important: Ensure editor.state.doc reflects the content of debouncedCurrentHtml
+    // Since debouncedCurrentHtml is updated immediately in onUpdate (when editable),
+    // and synced from props otherwise, editor.state.doc *should* be aligned when this runs.
+    const currentDoc = editor.state.doc;
+    const schema = editor.schema; // Get schema from the created editor instance
     const ranges: { from: number; to: number }[] = [];
 
     try {
-        // Use ProseMirror's textBetween for potentially more accurate text representation
         const blockSeparator = '\uFFFC'; // Must match separator used in mapPmCharIndexToPos
-        let baseText = '';
-        let currentText = '';
 
-        // --- Base Text Extraction (Still using basic approach) ---
-        // A robust solution requires parsing baseHtml using the schema into a temp node.
-        console.warn("[LegislationEditor useMemo] Using basic text conversion for base HTML. For accuracy, parse base HTML to ProseMirror node first.");
-        const tempBaseDiv = document.createElement('div'); tempBaseDiv.innerHTML = baseHtmlForDiff || ''; baseText = tempBaseDiv.innerText || '';
+        // --- Base Text Extraction (Using ProseMirror) ---
+        let baseText = '';
+        try {
+            // Create a temporary element to parse the base HTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = baseHtmlForDiff;
+            // Use ProseMirror's DOMParser with the editor's schema
+            const baseDocNode = DOMParser.fromSchema(schema).parse(tempDiv);
+             // Extract text using textBetween, mirroring how currentText is extracted
+             baseText = baseDocNode.textBetween(0, baseDocNode.content.size, blockSeparator, blockSeparator);
+             console.log(`[LegislationEditor useMemo] Base Text (PM): "${baseText.substring(0,100)}..." (Length: ${baseText.length})`);
+        } catch (parseError) {
+             console.error("[LegislationEditor useMemo] Error parsing baseHtmlForDiff:", parseError);
+             console.warn("[LegislationEditor useMemo] Falling back to basic text conversion for base HTML due to parse error.");
+             // Fallback (less accurate)
+             const tempBaseDiv = document.createElement('div'); tempBaseDiv.innerHTML = baseHtmlForDiff || ''; baseText = tempBaseDiv.innerText || '';
+        }
         // --- End Base Text Extraction ---
 
-        // Use textBetween for the *current* document state
-        currentText = doc.textBetween(0, doc.content.size, blockSeparator, blockSeparator);
-        console.log(`[LegislationEditor useMemo] Current doc text length: ${currentText.length}`);
 
-        console.log(`[LegislationEditor useMemo] Base Text (basic): "${baseText.substring(0,100)}..."`);
-        console.log(`[LegislationEditor useMemo] Current Text (PM): "${currentText.substring(0,100)}..."`);
+        // --- Current Text Extraction (Using ProseMirror) ---
+        // Use textBetween on the *current* document state
+        const currentText = currentDoc.textBetween(0, currentDoc.content.size, blockSeparator, blockSeparator);
+        console.log(`[LegislationEditor useMemo] Current Text (PM): "${currentText.substring(0,100)}..." (Length: ${currentText.length})`);
+        // --- End Current Text Extraction ---
 
         const areTextsDifferent = baseText !== currentText;
-        console.log(`[LegislationEditor useMemo] Plain texts different: ${areTextsDifferent}`);
+        console.log(`[LegislationEditor useMemo] PM-generated texts different: ${areTextsDifferent}`);
 
         if (areTextsDifferent) {
            console.log("[LegislationEditor useMemo] Calculating diffs with dmp...");
            const diffs = dmp.diff_main(baseText, currentText);
            dmp.diff_cleanupSemantic(diffs);
 
-           let currentTextCharIndex = 0;
+           let currentTextCharIndex = 0; // Tracks index within the *currentText* string
 
            diffs.forEach(([op, text]) => {
                if (op === DIFF_INSERT) {
                    const startIndex = currentTextCharIndex;
                    const endIndex = currentTextCharIndex + text.length;
-                   // Use the mapping function, passing the cached currentText
-                   const from = mapPmCharIndexToPos(doc, startIndex, currentText, 1); // Assoc forward for start
-                   const to = mapPmCharIndexToPos(doc, endIndex, currentText, -1);   // Assoc backward for end
+                   // Map indices from currentText back to positions in the currentDoc
+                   const from = mapPmCharIndexToPos(currentDoc, startIndex, currentText, 1); // Assoc forward for start
+                   const to = mapPmCharIndexToPos(currentDoc, endIndex, currentText, -1);   // Assoc backward for end
 
-                   if (from !== null && to !== null && from < to) {
-                        console.log(`[LegislationEditor useMemo] Mapped INSERT: "${text.substring(0,30)}..." from ${from} to ${to}`);
-                        ranges.push({ from, to });
+                   if (from !== null && to !== null && from <= to) { // Allow from === to for zero-length insert? (unlikely from dmp)
+                        // Clamp range to be within document bounds
+                        const docSize = currentDoc.content.size;
+                        const clampedFrom = Math.max(0, Math.min(from, docSize));
+                        const clampedTo = Math.max(0, Math.min(to, docSize));
+
+                        if (clampedFrom < clampedTo) { // Only add if it's a valid range after clamping
+                            console.log(`[LegislationEditor useMemo] Mapped INSERT: "${text.substring(0,30)}..." Indices ${startIndex}-${endIndex} -> Pos ${clampedFrom}-${clampedTo}`);
+                            ranges.push({ from: clampedFrom, to: clampedTo });
+                        } else if (clampedFrom > clampedTo) {
+                             console.warn(`[LegislationEditor useMemo] Mapped INSERT range invalid after clamping: From ${clampedFrom} > To ${clampedTo}. Original: ${from}-${to}. Indices: ${startIndex}-${endIndex}`);
+                        } // Ignore if from === to
                    } else {
-                       console.warn(`[LegislationEditor useMemo] Could not map INSERT indices: ${startIndex}-${endIndex} (text length ${text.length}) to positions ${from}-${to} for text: "${text.substring(0, 50)}..."`);
+                       console.warn(`[LegislationEditor useMemo] Could not map INSERT indices: ${startIndex}-${endIndex} (text length ${text.length}) to valid positions ${from}-${to} for text: "${text.substring(0, 50)}..."`);
                    }
-                   currentTextCharIndex += text.length;
+                   currentTextCharIndex += text.length; // Advance index in currentText
                } else if (op === DIFF_DELETE) {
-                   // No change needed to currentTextCharIndex for deletions in the *base* text
+                   // Deletions refer to the baseText, no index advancement needed for currentTextCharIndex
                } else if (op === DIFF_EQUAL) {
-                   currentTextCharIndex += text.length;
+                   currentTextCharIndex += text.length; // Advance index in currentText
                }
            });
         } else {
-            console.log("[LegislationEditor useMemo] Plain text versions are identical. No diff needed.");
+            console.log("[LegislationEditor useMemo] PM-generated text versions are identical. No diff needed.");
         }
     } catch (error) {
          console.error("[LegislationEditor useMemo] Error during diff calculation:", error);
@@ -515,45 +587,48 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     console.log(`[LegislationEditor useMemo] Calculated ${ranges.length} insertion ranges.`);
     return ranges;
 
-  }, [editor, baseHtmlForDiff, currentHtmlForDiff, dmp]); // Dependencies: Re-run only when these change
+  }, [editor, baseHtmlForDiff, debouncedCurrentHtml, dmp]); // Dependencies: editor, base HTML, debounced Current HTML, dmp instance
   // --- END Memoize ---
 
-  // --- Effect to update editor props when memoized ranges change ---
-  // ProseMirror decorations need to be updated via editor props.
+  // --- Effect to update editor props for decorations ---
   useEffect(() => {
-    if (!editor) return;
+    if (!editor || !editor.view.dom?.isConnected) return; // Check if editor view is mounted
 
     console.log('[LegislationEditor Effect] Updating editor props for decorations...');
-    editor.setOptions({
-        editorProps: {
-            attributes: {
-                 class: 'prose dark:prose-invert prose-sm sm:prose-base lg:prose-lg xl:prose-xl focus:outline-none max-w-none',
-            },
-            decorations(state) {
-                const doc = state.doc;
-                // Use the memoized ranges directly
-                const decorations = insertionRanges.map(range =>
-                    Decoration.inline(range.from, range.to, { class: 'change-highlight change-insert' })
-                );
+    // Get the latest decorations based on memoized ranges
+    const doc = editor.state.doc;
+    const decorations = insertionRanges.map(range =>
+        Decoration.inline(range.from, range.to, { class: 'change-highlight change-insert' })
+    );
 
-                // --- Add Comment Focus Decoration logic here if needed ---
-                if (focusedMarkId) {
-                    // Example: Find mark positions and add decorations
-                    // const commentDecorations = findAndCreateCommentDecorations(doc, focusedMarkId);
-                    // decorations.push(...commentDecorations);
-                }
-                // --- End Comment Focus ---
+    // --- Add Comment Focus Decoration logic here if needed ---
+    if (focusedMarkId) {
+        // Example: Find mark positions and add decorations
+        // const commentDecorations = findAndCreateCommentDecorations(doc, focusedMarkId);
+        // decorations.push(...commentDecorations);
+    }
+    // --- End Comment Focus ---
 
-                console.log(`[Decorations Fn using Memo] Creating DecorationSet with ${decorations.length} decorations.`);
-                return DecorationSet.create(doc, decorations);
-            },
-        }
-    });
-    // Force a view update to apply the new decorations immediately
-    // This might be needed if setOptions doesn't trigger it reliably
-     if (editor.view.dom?.isConnected) {
-         editor.view.dispatch(editor.state.tr);
-     }
+    console.log(`[Decorations Effect] Creating DecorationSet with ${decorations.length} decorations.`);
+    const decorationSet = DecorationSet.create(doc, decorations);
+
+    // Apply decorations using a transaction
+    const tr = editor.state.tr.setMeta('decorations', decorationSet);
+
+    // Avoid dispatching if the view isn't ready or if document/selection didn't change.
+    // Note: This won't prevent dispatch if *only* decorations change via setMeta,
+    // but dispatching in that case is generally fine.
+    if (!editor.state.tr.docChanged && editor.state.selection.eq(tr.selection)) {
+        // Optional: Could add a check here comparing the new decorationSet to the previous one
+        // if performance becomes an issue, perhaps storing the previous set in a ref.
+        // For now, let's rely on the doc/selection check.
+        // console.log('[Decorations Effect] Skipping dispatch, doc/selection unchanged.');
+        // return; // Decide if returning here is desired. Let's allow dispatch for now.
+    }
+
+    // Dispatch the transaction to update the view state with new decorations
+    editor.view.dispatch(tr);
+
 
   }, [editor, insertionRanges, focusedMarkId]); // Update props when editor instance or calculated ranges change
   // --- END Effect ---
@@ -571,10 +646,10 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
 
   return (
     <div className="relative">
-      {editor && showToolbar && (
-        <LegislationToolbar 
-          editor={editor} 
-          onAddCommentClick={onAddCommentClick || (() => console.warn("onAddCommentClick not provided to LegislationEditor"))} 
+      {editor && showToolbar && editable && ( // Only show toolbar if editable
+        <LegislationToolbar
+          editor={editor}
+          onAddCommentClick={onAddCommentClick || (() => console.warn("onAddCommentClick not provided to LegislationEditor"))}
         />
       )}
       <EditorContent editor={editor} />

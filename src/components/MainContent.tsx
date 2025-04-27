@@ -76,6 +76,9 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     resetContent,
     // --- END NEW ---
   } = useAppStore();
+  // Explicitly select the action function from the store state
+  const setSubmitStatusDirectly = useAppStore(state => state.setSubmitStatusDirectly);
+
   const focusedMarkId = useFocusedMarkId();
   const activeCommentInputMarkId = useActiveCommentInputMarkId();
   const { setActiveCommentInputMarkId } = useCommentActions();
@@ -273,25 +276,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   }, [viewMode, fullDocumentHtml, localEditorContent]); // Rerun when mode or global HTML changes - Added localEditorContent
   // --- END NEW ---
 
-  // --- NEW: Effect to sync local content when global HTML changes externally (e.g., applySuggestion) ---
-  useEffect(() => {
-    // Only run this sync logic when in edit mode
-    if (viewMode === 'edit' && fullDocumentHtml !== null && localEditorContent !== null) {
-      // If the global HTML is different from the local editing state,
-      // it implies an external update occurred (like applySuggestion).
-      if (fullDocumentHtml !== localEditorContent) {
-        console.log("[MainContent Sync Effect] External change detected in fullDocumentHtml while in edit mode. Syncing localEditorContent.");
-        setLocalEditorContent(fullDocumentHtml);
-        // Optional: Force editor update if setContent doesn't trigger it reliably enough for decorations
-        // if (editorInstance) {
-        //   editorInstance.commands.setContent(fullDocumentHtml, false); 
-        // }
-      }
-    }
-    // Depend only on fullDocumentHtml; viewMode and localEditorContent are checked inside.
-  }, [fullDocumentHtml, localEditorContent, viewMode]); 
-  // --- END NEW ---
-
   // --- Fetch ALL Pending Changes and Determine Base HTML ---
   useEffect(() => {
     const fetchAllChangesAndSetBase = async () => {
@@ -418,28 +402,20 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       );
   }
 
-  // --- Handler for Mode Change (Updated for Auth Check) ---
+  // --- Handler for Mode Change (Updated for Auth Check & View Mode Fix) ---
   const handleModeChange = (newMode: ViewMode | null) => {
       if (!newMode || newMode === viewMode || authLoading) return; // Don't change mode if auth state is loading
 
-      // --- NEW: Auth check before entering edit mode ---
+      // Auth check before entering edit mode
       if (newMode === 'edit' && !currentUser) {
           console.log("[MainContent] User not logged in. Preventing switch to edit mode.");
-          setShowLoginAlert(true); // Show the login prompt
-          // Do NOT change the viewMode, keep the current one
+          setShowLoginAlert(true);
           return;
       } else {
-          // Hide alert if switching to a mode other than edit, or if user is logged in
           setShowLoginAlert(false);
       }
-      // --- END NEW ---
 
       console.log(`[MainContent] Switching mode from ${viewMode} to ${newMode}`);
-
-      if (viewMode === 'edit' && newMode !== 'edit' && localEditorContent !== null) {
-          console.log("[MainContent] Syncing localEditorContent to global store (setFullDocumentHtml).");
-          setFullDocumentHtml(localEditorContent);
-      }
 
       setViewMode(newMode);
 
@@ -447,17 +423,21 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       setIsDiffDataReady(false);
 
       if (newMode === 'edit') {
-          // Ensure local state is initialized or re-initialized if needed
-          setLocalEditorContent(fullDocumentHtml ?? ''); // Initialize with current global or empty
-          console.log("[MainContent] Mode switched to edit. Initializing/resetting localEditorContent.");
+          // Initialize local state with the *current* fullDocumentHtml (could be initial or previously submitted)
+          // If a user submitted changes, fullDocumentHtml *might* differ from initialFullDocumentHtml
+          // Fetching pending changes should handle showing the correct base.
+          setLocalEditorContent(fullDocumentHtml ?? '');
+          console.log("[MainContent] Mode switched to edit. Initializing localEditorContent from current fullDocumentHtml.");
       } else {
           // Clear local state if switching out of edit mode
-          setLocalEditorContent(null);
-          console.log("[MainContent] Mode switched away from edit. Cleared localEditorContent.");
+          if (localEditorContent !== null) { // Clear only if it was actually set
+              setLocalEditorContent(null);
+              console.log("[MainContent] Mode switched away from edit. Cleared localEditorContent.");
+          }
       }
   };
 
-  // --- Determine props for LegislationEditor based on viewMode ---
+  // --- Determine props for LegislationEditor based on viewMode (VIEW MODE FIX) ---
   let editorContentToShow: string | null = null;
   let baseHtmlForEditor: string | null = null;
   let currentHtmlForEditor: string | null = null;
@@ -465,28 +445,32 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
 
   switch (viewMode) {
       case 'view':
-          editorContentToShow = fullDocumentHtml;
+          // --- FIX: Always show the initial, unchanged content in view mode ---
+          editorContentToShow = initialFullDocumentHtml;
           // No diff needed
           break;
       case 'changes':
-          editorContentToShow = finalProposedHtml; // Show the final state with changes
+          // Show the final state reflecting *pending* changes
+          editorContentToShow = finalProposedHtml; // Derived from fetched changes
           if (isDiffDataReady) {
-              baseHtmlForEditor = baseHtmlForDiff; // Original before changes
-              currentHtmlForEditor = finalProposedHtml; // Final state after changes
-              changesForEditor = allPendingChanges; // <-- Pass changes
+              baseHtmlForEditor = baseHtmlForDiff; // Original before *first* pending change (or initial if none)
+              currentHtmlForEditor = finalProposedHtml; // Final state *after* all pending changes
+              changesForEditor = allPendingChanges;
           }
           break;
       case 'edit':
-          editorContentToShow = localEditorContent; // Show local edits
+          // Show local, unsaved edits
+          editorContentToShow = localEditorContent;
           if (isDiffDataReady) {
-              baseHtmlForEditor = baseHtmlForDiff; // Original before changes
+              baseHtmlForEditor = baseHtmlForDiff; // Original before *first* pending change (or initial if none)
               currentHtmlForEditor = localEditorContent; // Compare against local edits
-              changesForEditor = allPendingChanges; // <-- Pass changes (might be useful for context)
+              changesForEditor = allPendingChanges; // Pass pending changes for context (optional display)
           }
           break;
   }
 
-  console.log(`[MainContent Props Calculation] Mode: ${viewMode}, isDiffReady: ${isDiffDataReady}`);
+  console.log(`[MainContent Props Calculation - View Mode Fix] Mode: ${viewMode}, isDiffReady: ${isDiffDataReady}`);
+  console.log(` - initialFullDocumentHtml: ${initialFullDocumentHtml !== null ? initialFullDocumentHtml.substring(0, 50) + '...' : 'null'}`);
   console.log(` - baseHtmlForEditor: ${baseHtmlForEditor !== null ? baseHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
   console.log(` - currentHtmlForEditor: ${currentHtmlForEditor !== null ? currentHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
   console.log(` - editorContentToShow: ${editorContentToShow !== null ? editorContentToShow.substring(0, 50) + '...' : 'null'}`);
@@ -505,17 +489,31 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   };
   // --- END NEW ---
 
-  // --- NEW: Handler to save local changes to store and submit --- 
+  // --- NEW: Handler to save local changes to store and submit ---
   const handleSaveChangesAndSubmit = () => {
+    // Check if the action function was successfully selected
+    if (!setSubmitStatusDirectly) {
+        console.error("setSubmitStatusDirectly action not found in store!");
+        return; // Prevent further execution if action is missing
+    }
+
     if (localEditorContent !== null) {
-      console.log("[MainContent] Saving local changes to store before submitting...");
-      setFullDocumentHtml(localEditorContent);
-      // Now that the store is updated, hasUnsavedChanges should become true,
-      // and submitChangesForReview can use the latest content.
-      console.log("[MainContent] Triggering submitChangesForReview...");
-      submitChangesForReview();
+        if (localEditorContent === initialFullDocumentHtml) {
+             console.log("[MainContent] No changes detected compared to the initial document. Nothing to submit.");
+              setSubmitStatusDirectly({ type: 'success', message: 'No changes to submit.' }, false);
+              setTimeout(() => setSubmitStatusDirectly(null), 3000); // Clear status only
+             return;
+        }
+
+        console.log("[MainContent] Saving local changes to store before submitting...");
+        setFullDocumentHtml(localEditorContent);
+
+        console.log("[MainContent] Triggering submitChangesForReview...");
+        submitChangesForReview();
     } else {
-      console.warn("[MainContent] Attempted to save and submit with null localEditorContent.");
+        console.warn("[MainContent] Attempted to save and submit with null localEditorContent.");
+         setSubmitStatusDirectly({ type: 'error', message: 'Cannot submit: No content available.' }, false);
+         setTimeout(() => setSubmitStatusDirectly(null), 5000); // Clear status only
     }
   };
   // --- END NEW ---
@@ -590,29 +588,27 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                  {/* --- NEW: Submit/Discard Buttons (only in Edit mode) --- */}
                  {viewMode === 'edit' && (
                      <div className="flex items-center space-x-2">
-                         {hasUnsavedChanges && (
+                         {/* Discard Button Logic (compare local to initial) */}
+                         {localEditorContent !== initialFullDocumentHtml && ( // Show discard only if local differs from initial
                              <Button
                                  variant="outline"
                                  onClick={handleDiscard}
-                                 disabled={isSubmitting || localEditorContent === initialFullDocumentHtml} // Check local state in edit mode
+                                 disabled={isSubmitting}
                                  size="sm"
                                  title="Discard Changes"
                              >
                                  <Trash2 className="h-4 w-4" />
                              </Button>
                          )}
+                         {/* Submit Button Logic (compare local to initial) */}
                          <Button
-                             onClick={handleSaveChangesAndSubmit} // Use new handler
-                             disabled={isSubmitting || localEditorContent === initialFullDocumentHtml} // Check local state
+                             onClick={handleSaveChangesAndSubmit}
+                             disabled={isSubmitting || localEditorContent === initialFullDocumentHtml} // Disable if submitting or no changes from initial
                              size="sm"
-                             className={localEditorContent !== initialFullDocumentHtml ? "bg-green-600 hover:bg-green-700" : ""} // Style based on local state
-                             title={localEditorContent !== initialFullDocumentHtml ? "Submit Changes for Review" : "No changes to submit"} // Title based on local state
+                             className={localEditorContent !== initialFullDocumentHtml ? "bg-green-600 hover:bg-green-700" : ""} // Style based on changes from initial
+                             title={localEditorContent !== initialFullDocumentHtml ? "Submit Changes for Review" : "No changes to submit"}
                          >
-                             {isSubmitting ? (
-                                 <Loader2 className="animate-spin h-4 w-4" />
-                             ) : (
-                                 <Send className="h-4 w-4" />
-                             )}
+                             {isSubmitting ? <Loader2 className="animate-spin h-4 w-4" /> : <Send className="h-4 w-4" />}
                          </Button>
                      </div>
                  )}
@@ -723,8 +719,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                       // Use the derived content variable
                       content={editorContentToShow}
                       editable={viewMode === 'edit' && !!currentUser} // Editor editable only if in edit mode AND logged in
-                      onChange={viewMode === 'edit' && currentUser ? setLocalEditorContent : undefined} // Only allow changes if logged in
-                      onAddCommentClick={viewMode === 'edit' && currentUser ? handleToolbarAddCommentClick : undefined} // Only allow comments if logged in
+                      onChange={(viewMode === 'edit' && !!currentUser) ? setLocalEditorContent : undefined} // Only allow changes if logged in
+                      onAddCommentClick={(viewMode === 'edit' && !!currentUser) ? handleToolbarAddCommentClick : undefined} // Only allow comments if logged in
                       onEditorReady={handleEditorReady}
                       showToolbar={false} // Toolbar is handled above
                       // Pass diff props only when ready
