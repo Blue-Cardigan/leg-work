@@ -67,9 +67,9 @@
 
 /* Style for the comment mark/highlight */
 .comment-highlight {
-  background-color: rgba(255, 215, 0, 0.3); /* Light gold highlight */
-  border-bottom: 1px dashed orange;
-  cursor: pointer; /* Indicate interactivity */
+  background-color: rgba(255, 255, 0, 0.4); /* Light yellow highlight */
+  cursor: pointer;
+  border-bottom: 1px dotted #a2a200;
 }
 
 /* Placeholder styling */
@@ -107,4 +107,64 @@
 /* Adjust as needed */
 .comment-highlight.change-insert {
     box-shadow: 0 0 0 1px rgba(0, 200, 0, 0.6);
-} 
+}
+
+.tiptap {
+  padding: 1rem;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  min-height: 200px; /* Ensure editor has some visible height */
+  outline: none; /* Remove default focus outline if desired */
+  line-height: 1.6;
+}
+
+.tiptap p {
+  margin: 0.5em 0;
+}
+
+.tiptap h1,
+.tiptap h2,
+.tiptap h3,
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
+  margin-top: 1em;
+  margin-bottom: 0.5em;
+  font-weight: bold;
+}
+
+.tiptap a {
+  color: blue;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.tiptap:focus {
+  border-color: #66afe9;
+  box-shadow: 0 0 8px rgba(102, 175, 233, 0.6);
+}
+
+/* --- NEW: Diff Highlighting Styles --- */
+.change-highlight.change-insert {
+  background-color: rgba(0, 255, 0, 0.2); /* Light green for insertions */
+  /* text-decoration: underline green; */ /* Optional: underline */
+}
+
+/* Placeholder for deletion styling - Using a marker or strikethrough */
+.change-highlight.change-delete-marker {
+  /* Style for the widget marker itself (e.g., if using Decoration.widget) */
+  display: inline-block;
+  width: 0.5em;
+  height: 1em;
+  background-color: rgba(255, 0, 0, 0.5); /* Red marker */
+  vertical-align: middle;
+  margin: 0 0.1em;
+  border-radius: 2px;
+}
+
+.change-highlight.change-delete {
+   /* If applying directly to text (strikethrough) - needs different decoration logic */
+   background-color: rgba(255, 0, 0, 0.2); /* Light red for deletions */
+   text-decoration: line-through red;
+}
+/* --- END: Diff Highlighting Styles --- */ 

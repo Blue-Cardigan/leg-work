@@ -572,6 +572,23 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
                    currentTextCharIndex += text.length; // Advance index in currentText
                } else if (op === DIFF_DELETE) {
                    // Deletions refer to the baseText, no index advancement needed for currentTextCharIndex
+                   // However, we need to mark *where* the deletion occurred in the *current* text.
+                   // The currentTextCharIndex is the position *after* the deletion point.
+                   const deletionPointIndex = currentTextCharIndex;
+                   const pos = mapPmCharIndexToPos(currentDoc, deletionPointIndex, currentText, 1); // Use forward assoc to place marker *at* the deletion point
+
+                   if (pos !== null) {
+                       // Store the position for widget decoration later.
+                       // We'll handle this in the effect hook based on the diff result.
+                       // For now, let's just log it.
+                       // We need to return this info from the memo.
+                       console.log(`[LegislationEditor useMemo] Identified DELETION point before text index ${deletionPointIndex} -> Pos ${pos}`);
+                       // Deletion logic needs rethinking - map from BASE text index.
+                       // Let's skip deletion mapping for now and focus on insertion styling.
+                       // TODO: Re-implement deletion highlighting.
+                   } else {
+                        console.warn(`[LegislationEditor useMemo] Could not map DELETION point index: ${deletionPointIndex}`);
+                   }
                } else if (op === DIFF_EQUAL) {
                    currentTextCharIndex += text.length; // Advance index in currentText
                }
@@ -585,7 +602,7 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     }
 
     console.log(`[LegislationEditor useMemo] Calculated ${ranges.length} insertion ranges.`);
-    return ranges;
+    return ranges; // Return only insertion ranges for now
 
   }, [editor, baseHtmlForDiff, debouncedCurrentHtml, dmp]); // Dependencies: editor, base HTML, debounced Current HTML, dmp instance
   // --- END Memoize ---
@@ -597,9 +614,25 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     console.log('[LegislationEditor Effect] Updating editor props for decorations...');
     // Get the latest decorations based on memoized ranges
     const doc = editor.state.doc;
-    const decorations = insertionRanges.map(range =>
-        Decoration.inline(range.from, range.to, { class: 'change-highlight change-insert' })
-    );
+    const decorations: Decoration[] = []; // Explicitly type as Decoration array
+
+    // --- Insertion Decorations ---
+    insertionRanges.forEach(range => {
+        decorations.push(Decoration.inline(range.from, range.to, { class: 'change-highlight change-insert' }));
+    });
+
+    // --- Deletion Decorations (Placeholder/Revisit) ---
+    // TODO: Implement deletion decoration calculation in useMemo and apply here
+    // Example (if deletionPoints was calculated):
+    // deletionPoints.forEach(pos => {
+    //   decorations.push(Decoration.widget(pos, () => {
+    //     const span = document.createElement('span');
+    //     span.className = 'change-highlight change-delete-marker';
+    //     // Optionally add content like ' [deleted] ' or a visual cue
+    //     return span;
+    //   }));
+    // });
+    // ---
 
     // --- Add Comment Focus Decoration logic here if needed ---
     if (focusedMarkId) {
