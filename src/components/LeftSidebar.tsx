@@ -313,7 +313,7 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
             {/* --- END NEW Minimal Toggles --- */}
 
             {/* List Area */}
-            <div className="flex-grow overflow-y-auto">
+            <div className="flex-grow overflow-y-auto pb-32">
               {isLoadingList && <div className="p-4 text-center text-gray-500 dark:text-gray-400">Loading list...</div>}
               {error && <div className="p-4 text-center text-red-600 dark:text-red-400">Error loading list: {typeof error === 'string' ? error : 'Unknown error'}</div>}
               {/* Check filteredLegislationList availability before accessing length */} 
@@ -353,7 +353,7 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
       </div>
 
       {/* Footer: Auth Component and Prompt */}
-      <div className={`p-2 border-t border-gray-200 dark:border-gray-700 mt-auto bg-gray-50 dark:bg-gray-900/50 overflow-hidden ${isSidebarCollapsed ? 'opacity-0 h-0 p-0 border-none' : 'opacity-100'} transition-opacity duration-300`}>
+      <div className={`sticky bottom-0 p-2 border-t border-gray-200 dark:border-gray-700 mt-auto bg-gray-50 dark:bg-gray-900/50 ${isSidebarCollapsed ? 'opacity-0 h-0 p-0 border-none' : 'opacity-100'} transition-opacity duration-300`}>
         {/* Login Prompt */} 
         {!authLoading && !isLoggedIn && !isSidebarCollapsed && (
             <div className="flex items-start space-x-2 text-xs text-gray-600 dark:text-gray-400 mb-2 p-2 rounded bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800">

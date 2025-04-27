@@ -354,13 +354,9 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   // --- Error or No Content State (After Loading) ---
   // If global content failed to load (and not in edit mode trying to use local content)
   if (fullDocumentHtml === null && viewMode !== 'edit') {
-      console.log('[MainContent] Error: fullDocumentHtml is null after loading attempt (not in edit mode).');
+      console.log('[MainContent] Error: fullDocumentHtml is null after loading attempt (not in edit mode). Displaying loader.');
       // TODO: Display a more specific error message if available from the store
-      return (
-        <div className="flex-grow p-6 text-center text-red-600 dark:text-red-400 bg-white dark:bg-gray-900">
-           Failed to load legislation content. Please try selecting it again or contact support.
-        </div>
-      );
+      return <SkeletonLoader message="Failed to load legislation content. Please try selecting it again." />;
   }
   // If entering edit mode but initialization failed (global was null)
   if (viewMode === 'edit' && localEditorContent === null) {
