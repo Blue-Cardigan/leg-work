@@ -36,6 +36,7 @@ export interface ChatMessagePart {
 export interface ChatMessage {
   role: 'user' | 'model';
   parts: ChatMessagePart[];
+  contextUsed?: string | null; // <-- Add optional field to store context
 }
 // --- END NEW ---
 
@@ -159,6 +160,7 @@ interface AppState {
   submitComment: (commentData: { comment_text: string; legislation_id: string; mark_id: string; section_key?: string }) => Promise<{ success: boolean }>;
   setRightSidebarContent: (contentType: 'chat' | 'comments') => void;
   toggleRightSidebar: () => void; // NEW: Action signature
+  applySuggestion: (originalText: string, suggestedText: string) => void; // <-- NEW ACTION SIGNATURE
   // --- END NEW ---
 }
 
@@ -457,6 +459,13 @@ export const useAppStore = create(
 
     // --- NEW: Chat Actions ---
     sendChatMessage: async (messageText: string) => {
+      // Extract context from messageText IF PRESENT (used for association)
+      let contextTextForAssociation: string | null = null;
+      const contextMatch = messageText.match(/^Context \(lines \d+-\d+\):\n([\s\S]*?)\n\nQuestion:/);
+      if (contextMatch && contextMatch[1]) {
+          contextTextForAssociation = contextMatch[1];
+      }
+
       if (!messageText.trim() || get().isChatLoading) return;
   
       const newUserMessage: ChatMessage = { role: 'user', parts: [{ text: messageText }] };
@@ -475,7 +484,7 @@ export const useAppStore = create(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ 
               history: currentHistory, 
-              message: messageText 
+              message: messageText // Send the full message including context preamble
           }),
         });
   
@@ -494,9 +503,13 @@ export const useAppStore = create(
         let modelResponseText = '';
         let modelMessageIndex = -1;
 
-        // Add initial model message placeholder
+        // Add initial model message placeholder, INCLUDING the associated context
         set(state => {
-          state.chatMessages.push({ role: 'model', parts: [{ text: '' }] });
+          state.chatMessages.push({
+            role: 'model',
+            parts: [{ text: '' }],
+            contextUsed: contextTextForAssociation, // <-- Associate context here
+          });
           modelMessageIndex = state.chatMessages.length - 1;
         });
   
@@ -509,7 +522,8 @@ export const useAppStore = create(
   
           // Update the last message (model's response) incrementally using Immer
           set(state => {
-            if (modelMessageIndex !== -1 && state.chatMessages[modelMessageIndex]) {
+            // Ensure message exists and update its parts
+            if (modelMessageIndex !== -1 && state.chatMessages[modelMessageIndex]?.parts) {
                state.chatMessages[modelMessageIndex].parts = [{ text: modelResponseText }];
             }
           });
@@ -865,6 +879,27 @@ export const useAppStore = create(
     toggleRightSidebar: () => { // NEW: Implement toggle action
         set(state => {
             state.isRightSidebarOpen = !state.isRightSidebarOpen;
+        });
+    },
+    // --- END NEW ---
+
+    // --- NEW: Apply Suggestion Action Implementation ---
+    applySuggestion: (originalText: string, suggestedText: string) => {
+        set((state) => {
+            if (state.fullDocumentHtml && originalText) {
+                // Replace only the first occurrence for safety
+                const updatedHtml = state.fullDocumentHtml.replace(originalText, suggestedText);
+                if (updatedHtml !== state.fullDocumentHtml) {
+                    console.log("[Store] Applying suggestion.");
+                    state.fullDocumentHtml = updatedHtml;
+                    state.hasUnsavedChanges = true;
+                } else {
+                    console.warn("[Store] Suggestion application failed: Original text not found in document.");
+                    // Optionally notify the user here
+                }
+            } else {
+                console.warn("[Store] Suggestion application failed: Missing document HTML or original text.");
+            }
         });
     },
     // --- END NEW ---

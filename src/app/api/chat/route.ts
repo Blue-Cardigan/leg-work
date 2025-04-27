@@ -13,15 +13,21 @@ const model = genAI.getGenerativeModel({
    model: MODEL_NAME,
    // Add system instructions if desired
    // systemInstruction: "You are a helpful assistant specializing in UK legislation.",
- });
+   systemInstruction: `You are a helpful assistant specializing in UK legislation drafting.
+The user may provide context from the document like this:
+Context (lines X-Y):
+<context text>
 
-// Define safety settings (adjust as needed)
-const safetySettings = [
-  { category: HarmCategory.HARM_CATEGORY_HARASSMENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_HATE_SPEECH, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-  { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_MEDIUM_AND_ABOVE },
-];
+Question: <user question>
+
+When suggesting a specific change *to the provided context*, please format your suggestion like this, containing *only* the modified text based on the context provided:
+
+\`\`\`suggestion
+<the exact modified text based *only* on the provided context>
+\`\`\`
+
+Only use this format for direct modifications of the provided context. For general discussion, explanations, or suggestions not tied to specific context, use normal text. Do not add any explanations before or after the suggestion block itself.`,
+ });
 
 // Helper function to create a ReadableStream from the Gemini response
 function createStream(iterator: AsyncGenerator<any>) {
@@ -62,7 +68,6 @@ export async function POST(request: NextRequest) {
         maxOutputTokens: 1000, // Adjust as needed
         // Consider adding temperature, topK, topP if needed
       },
-      safetySettings,
     });
 
     console.log("Sending message to Gemini:", message);

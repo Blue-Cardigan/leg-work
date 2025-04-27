@@ -43,18 +43,16 @@ interface ProposedChange {
 // --- END ProposedChange Type ---
 
 // --- NEW: Simple Skeleton Loader Component ---
-const SkeletonLoader: React.FC = () => (
-    <div className="space-y-4 p-6 animate-pulse">
-      <div className="h-6 bg-gray-300 dark:bg-gray-700 rounded w-3/4"></div>
+const SkeletonLoader: React.FC<{ message?: string }> = ({ message = "Loading content..." }) => (
+    <div className="flex-grow p-6 flex flex-col items-center justify-center bg-white dark:bg-gray-900 text-center text-gray-500 dark:text-gray-400">
+         <Loader2 className="animate-spin h-8 w-8 text-blue-500 mx-auto mb-3" />
+         <p className="text-sm mb-4">{message}</p>
+         <div className="w-full max-w-md space-y-4 animate-pulse">
+             <div className="h-6 bg-gray-300 dark:bg-gray-700 rounded w-3/4 mx-auto"></div>
       <div className="space-y-2">
-        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded"></div>
-        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-5/6"></div>
-        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-4/6"></div>
+                 <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-full"></div>
+                 <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-5/6 mx-auto"></div>
       </div>
-       <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-1/2 mt-4"></div>
-       <div className="space-y-2 pt-4">
-        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded"></div>
-        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-5/6"></div>
       </div>
     </div>
   );
@@ -63,27 +61,40 @@ const SkeletonLoader: React.FC = () => (
 export default function MainContent({ }: MainContentProps) { // Props might be empty now
   const {
     selectedLegislation,
-    // selectedLegislationContent, // We'll use fullDocumentHtml now
-    isLoadingContent,
-    fullDocumentHtml, // Use combined HTML state
-    setFullDocumentHtml, // Use action for combined HTML
-    submitStatus, // Keep for displaying messages
-    fetchComments, // Still needed if comments fetched based on legislation ID
-    setFocusedMarkId, // Action to set focus
-    // Removed state/actions related to buttons moved to LeftSidebar:
-    // hasUnsavedChanges, submitChangesForReview, resetContent, isCommentSidebarOpen, comments
+    isLoadingContent: isGlobalLoadingContent, // Rename for clarity
+    fullDocumentHtml,
+    setFullDocumentHtml,
+    submitStatus,
+    fetchComments,
+    setFocusedMarkId,
+    initialFullDocumentHtml, // <-- Get initial HTML for correct base setting
   } = useAppStore();
-  const focusedMarkId = useFocusedMarkId(); // Use selector hook
-  const activeCommentInputMarkId = useActiveCommentInputMarkId(); // Use selector hook
-  const { setActiveCommentInputMarkId } = useCommentActions(); // Get specific action
+  const focusedMarkId = useFocusedMarkId();
+  const activeCommentInputMarkId = useActiveCommentInputMarkId();
+  const { setActiveCommentInputMarkId } = useCommentActions();
 
-  // --- NEW: Local state for editor content during editing ---
   const [localEditorContent, setLocalEditorContent] = useState<string | null>(null);
-  // --- END NEW ---
+  const supabase = createClient();
+  const mainContentRef = useRef<HTMLDivElement>(null);
 
-  const supabase = createClient(); // Initialize Supabase client
-  const mainContentRef = useRef<HTMLDivElement>(null); // Ref for the main scrollable area
-  const editorRef = useRef<any>(null); // Ref to potentially access editor instance if needed
+  // --- State for editor instance ---
+  const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
+
+  // --- View Mode and Changes State ---
+  type ViewMode = 'view' | 'changes' | 'edit';
+  const [viewMode, setViewMode] = useState<ViewMode>('view');
+  const [allPendingChanges, setAllPendingChanges] = useState<ProposedChange[]>([]);
+  const [isLoadingChanges, setIsLoadingChanges] = useState<boolean>(false);
+  const [changesError, setChangesError] = useState<string | null>(null);
+  const [baseHtmlForDiff, setBaseHtmlForDiff] = useState<string | null>(null);
+  const [isDiffDataReady, setIsDiffDataReady] = useState<boolean>(false);
+  // --- NEW: State for final proposed HTML in 'changes' mode ---
+  const [finalProposedHtml, setFinalProposedHtml] = useState<string | null>(null);
+
+  // --- Header and Note State ---
+  const [explanatoryNoteHtml, setExplanatoryNoteHtml] = useState<string | null>(null);
+  const [isExplanatoryNoteVisible, setIsExplanatoryNoteVisible] = useState<boolean>(true);
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
 
   // --- Fetch comments when legislation changes (Keep this) ---
   // This assumes CommentDisplaySidebar is rendered elsewhere based on store state
@@ -94,7 +105,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   }, [selectedLegislation, fetchComments]);
   // ----------------------------------------------------------
 
-  console.log('[MainContent] Rendering. isLoading:', isLoadingContent, 'fullDocumentHtml:', fullDocumentHtml?.substring(0, 100) + '...');
+  console.log('[MainContent] Rendering. isLoading:', isGlobalLoadingContent, 'fullDocumentHtml:', fullDocumentHtml?.substring(0, 100) + '...');
 
   // Function to scroll to a mark and set focus (Keep this)
   const handleScrollToMark = useCallback((markId: string) => {
@@ -117,9 +128,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       console.warn(`Could not find mark element with ID: ${markId}`);
     }
   }, [setFocusedMarkId]); // Dependency on setFocusedMarkId
-
-  // --- State for editor instance ---
-  const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
 
   // --- Handler to receive editor instance ---
   const handleEditorReady = useCallback((editor: Editor) => {
@@ -162,20 +170,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     setTimeout(() => handleScrollToMark(markId), 100); 
   };
 
-  // --- NEW: View Mode State ---
-  type ViewMode = 'view' | 'changes' | 'edit';
-  const [viewMode, setViewMode] = useState<ViewMode>('view');
-  const [explanatoryNoteHtml, setExplanatoryNoteHtml] = useState<string | null>(null);
-  const [isExplanatoryNoteVisible, setIsExplanatoryNoteVisible] = useState<boolean>(true);
-  // State to hold changes for diff view (will fetch later)
-  const [allPendingChanges, setAllPendingChanges] = useState<ProposedChange[]>([]);
-  const [isLoadingChanges, setIsLoadingChanges] = useState<boolean>(false);
-  const [changesError, setChangesError] = useState<string | null>(null);
-  const [baseHtmlForDiff, setBaseHtmlForDiff] = useState<string | null>(null); // New state for base HTML
-  // --- NEW: Collapse state for HEADER area --- Renamed from isEditorCollapsed
-  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
-  // --- END NEW ---
-
   // --- NEW: Extract Explanatory Note ---
   useEffect(() => {
     if (fullDocumentHtml && viewMode === 'view') {
@@ -210,7 +204,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       if (viewMode === 'edit') {
           // Initialize local state when entering edit mode
           if (localEditorContent === null) { // Only initialize if not already set
-              setLocalEditorContent(fullDocumentHtml);
+              setLocalEditorContent(fullDocumentHtml ?? ''); // Initialize with global or empty string
               console.log("[MainContent] Initialized localEditorContent for edit mode.");
           }
       } else {
@@ -227,90 +221,104 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   }, [viewMode, fullDocumentHtml, localEditorContent]); // Rerun when mode or global HTML changes - Added localEditorContent
   // --- END NEW ---
 
-  // --- Fetch ALL Pending Changes ---
+  // --- Fetch ALL Pending Changes and Determine Base HTML ---
   useEffect(() => {
-    const fetchAllChanges = async () => {
+    const fetchAllChangesAndSetBase = async () => {
         if (!selectedLegislation?.identifier) return;
 
-        console.log(`[MainContent] Fetching all pending changes for ${selectedLegislation.identifier}`);
+        // Reset states before fetching
         setIsLoadingChanges(true);
         setChangesError(null);
         setAllPendingChanges([]);
-        setBaseHtmlForDiff(null); // Reset base HTML
+        setBaseHtmlForDiff(null);
+        setIsDiffDataReady(false); // Explicitly set diff not ready
+        console.log(`[MainContent FetchChanges] Fetching for ${selectedLegislation.identifier}. Global loading: ${isGlobalLoadingContent}`);
+
+        // --- NEW: Reset final proposed HTML --- 
+        setFinalProposedHtml(null);
 
         try {
-             // **IMPORTANT:** Fetching *all* changes usually requires specific permissions.
-             // The standard RLS allows users to see only their own.
-             // We likely need a Supabase RPC function (`get_all_pending_changes`)
-             // defined with `SECURITY DEFINER` or adjust RLS for specific roles.
-             // Using RPC is generally safer.
-
-            // Placeholder for RPC call:
+            // Fetch pending changes
             const { data, error } = await supabase.rpc('get_all_pending_changes_for_legislation', {
                 p_legislation_id: selectedLegislation.identifier
             });
 
-            // Fallback/Alternative (if RLS allows or for testing):
-            // const { data, error } = await supabase
-            //     .from('proposed_changes')
-            //     .select('*')
-            //     .eq('legislation_id', selectedLegislation.identifier)
-            //     .eq('status', 'pending')
-            //     .order('created_at', { ascending: true }); // Oldest first might be better for applying diffs
-
-            if (error) {
-                console.error("[MainContent] Error fetching all pending changes:", error);
-                throw error;
-            }
+            if (error) throw error;
 
             const fetchedChanges = (data as ProposedChange[]) || [];
-            console.log(`[MainContent] Fetched ${fetchedChanges.length} pending changes.`);
             setAllPendingChanges(fetchedChanges);
+            console.log(`[MainContent FetchChanges] Fetched ${fetchedChanges.length} changes.`);
 
             // Determine the base HTML for comparison
-            if (fetchedChanges.length > 0) {
-                // The original HTML *before* the very first pending change
-                setBaseHtmlForDiff(fetchedChanges[0].original_html);
+            let baseHtml: string | null = null;
+            if (fetchedChanges.length > 0 && fetchedChanges[0].original_html !== null) {
+                // Base is the original HTML *before* the very first pending change
+                baseHtml = fetchedChanges[0].original_html;
+                console.log(`[MainContent FetchChanges] Base HTML set from first pending change's original_html.`);
             } else {
-                 // If no pending changes, the base is the current document for diffing purposes (no diffs)
-                 setBaseHtmlForDiff(fullDocumentHtml);
+                // If no pending changes OR the first change's original_html is null (shouldn't happen?),
+                // the "base" for diffing purposes is the initial state loaded from the store.
+                 baseHtml = initialFullDocumentHtml; // Use the initial state from store
+                 console.log(`[MainContent FetchChanges] Base HTML set from initialFullDocumentHtml (length: ${baseHtml?.length ?? 0}). No pending changes or first original_html was null.`);
+            }
+            setBaseHtmlForDiff(baseHtml);
+
+            // Now that changes are fetched and base HTML is determined, mark diff data as ready
+            setIsDiffDataReady(true);
+            console.log(`[MainContent FetchChanges] Diff data is now ready. Base HTML length: ${baseHtml?.length ?? 0}`);
+
+            // --- NEW: Set final proposed HTML --- 
+            if (fetchedChanges.length > 0 && fetchedChanges[fetchedChanges.length - 1].proposed_html !== null) {
+                // Assume last change holds the cumulative proposed state
+                setFinalProposedHtml(fetchedChanges[fetchedChanges.length - 1].proposed_html);
+                console.log(`[MainContent FetchChanges] Final proposed HTML set from last pending change.`);
+            } else {
+                // If no changes, the "final proposed" is the same as the current/initial
+                setFinalProposedHtml(fullDocumentHtml);
+                console.log(`[MainContent FetchChanges] Final proposed HTML set from fullDocumentHtml (no pending changes).`);
             }
 
         } catch (err: any) {
-            console.error("[MainContent] Failed to fetch all pending changes:", err);
+            console.error("[MainContent FetchChanges] Failed to fetch or process:", err);
             setChangesError(err.message || "Failed to load pending changes.");
             setAllPendingChanges([]);
             setBaseHtmlForDiff(null);
+            setIsDiffDataReady(false);
+            setFinalProposedHtml(null); // Ensure reset on early exit
         } finally {
-            setIsLoadingChanges(false);
+            setIsLoadingChanges(false); // Loading finished (success or error)
         }
     };
 
-    if (selectedLegislation?.identifier && (viewMode === 'changes' || viewMode === 'edit')) {
-        fetchAllChanges();
+    // Only fetch changes if needed for the current mode AND the initial global content has loaded
+    if (selectedLegislation?.identifier && (viewMode === 'changes' || viewMode === 'edit') && !isGlobalLoadingContent) {
+        fetchAllChangesAndSetBase();
     } else {
+        // Reset if not in relevant modes or global content is still loading
         setAllPendingChanges([]);
         setChangesError(null);
-        setBaseHtmlForDiff(null); // Clear base HTML if not in relevant modes
+        setBaseHtmlForDiff(null);
+        setIsDiffDataReady(false);
+        setFinalProposedHtml(null);
     }
-    // Add supabase to dependencies
-  }, [selectedLegislation, viewMode, supabase, fullDocumentHtml]);
+  }, [selectedLegislation, viewMode, supabase, initialFullDocumentHtml, isGlobalLoadingContent]); // Added dependencies
   // --- END Fetch ---
 
+  // --- Derived Loading State ---
+  // Overall loading is true if global content is loading OR if we are in diff mode and waiting for changes/baseHTML
+  const isLoading = isGlobalLoadingContent || ((viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges);
+  const isEditorReadyForDisplay = !isGlobalLoadingContent && (viewMode === 'view' || ((viewMode === 'changes' || viewMode === 'edit') && isDiffDataReady));
+
   // --- Loading State ---
-  if (isLoadingContent) {
-    return (
-      <div className="flex-grow p-6 flex items-center justify-center bg-white dark:bg-gray-900">
-        {/* Use Skeleton Loader during initial load as well for consistency */}
-        <SkeletonLoader />
-        {/* Original Loader Text:
-        <div className="text-center text-gray-500 dark:text-gray-400">
-          <Loader2 className="animate-spin h-8 w-8 text-blue-500 mx-auto mb-2" />
-          Loading content...
-        </div>
-        */}
-      </div>
-    );
+  if (isLoading) {
+    // Customize message based on what's loading
+    let loadingMessage = "Loading content...";
+    if (!isGlobalLoadingContent && isLoadingChanges) {
+        loadingMessage = "Loading pending changes...";
+    } else if (!isGlobalLoadingContent && (viewMode === 'changes' || viewMode === 'edit') && !isDiffDataReady) {
+        loadingMessage = "Preparing diff view..."; // Catch state where changes loaded but diff isn't ready yet
+    }
+    return <SkeletonLoader message={loadingMessage} />;
   }
 
   // --- No Legislation Selected State ---
@@ -318,81 +326,84 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     return <div className="flex-grow p-6 text-center text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-900">Select legislation from the sidebar to view its content.</div>;
   }
 
-  // --- No Content State (After Loading) ---
-  // Render Skeleton instead of text if content is null after load attempt
+  // --- Error or No Content State (After Loading) ---
+  // If global content failed to load (and not in edit mode trying to use local content)
   if (fullDocumentHtml === null && viewMode !== 'edit') {
-      console.log('[MainContent] Error: fullDocumentHtml is null after loading (not in edit mode). Showing skeleton.');
-      // Return the skeleton loader within the basic header structure
+      console.log('[MainContent] Error: fullDocumentHtml is null after loading attempt (not in edit mode).');
+      // TODO: Display a more specific error message if available from the store
       return (
-        <div className="flex-grow flex flex-col bg-white dark:bg-gray-900 relative h-full">
-            {/* Render Header Area (potentially collapsed) even when showing skeleton */}
-            <div className={`flex-shrink-0 overflow-hidden transition-all duration-300 ease-in-out ${isHeaderCollapsed ? 'max-h-0 p-0 mb-0 invisible opacity-0' : 'p-6 pb-2 visible opacity-100'}`}>
-                <div className="flex justify-between items-center mb-3">
-                    <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{selectedLegislation.title}</h1>
-                     {/* Collapse button position might need adjustment here - placing it with toggles */}
-                </div>
-                 <div className="mb-3 flex justify-between items-center">
-                     <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { handleModeChange(value as ViewMode) }} size="sm">
-                          {/* Toggle Items - placeholder */}
-                           <ToggleGroupItem value="view" aria-label="View mode"><Eye className="h-4 w-4 mr-1" /> View</ToggleGroupItem>
-                           <ToggleGroupItem value="changes" aria-label="View changes mode"><GitCompareArrows className="h-4 w-4 mr-1" /> Changes</ToggleGroupItem>
-                           <ToggleGroupItem value="edit" aria-label="Edit mode"><Pencil className="h-4 w-4 mr-1" /> Edit</ToggleGroupItem>
-                     </ToggleGroup>
-                     <Button
-                         variant="ghost"
-                         size="sm"
-                         onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
-                         aria-label={isHeaderCollapsed ? "Expand header" : "Collapse header"}
-                     >
-                         {isHeaderCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
-                     </Button>
-                 </div>
-            </div>
-            {/* Show Skeleton in the main area */}
-            <div className="flex-grow overflow-y-auto">
-                <SkeletonLoader />
-            </div>
+        <div className="flex-grow p-6 text-center text-red-600 dark:text-red-400 bg-white dark:bg-gray-900">
+           Failed to load legislation content. Please try selecting it again or contact support.
+        </div>
+      );
+  }
+  // If entering edit mode but initialization failed (global was null)
+  if (viewMode === 'edit' && localEditorContent === null) {
+      console.log('[MainContent] Warning: Entering edit mode but initial content was null. Cannot edit.');
+       return (
+        <div className="flex-grow p-6 text-center text-orange-600 dark:text-orange-400 bg-white dark:bg-gray-900">
+           Cannot enter edit mode because the initial content failed to load.
         </div>
       );
   }
 
-  // Allow rendering editor in edit mode even if global HTML was initially null, using local state
-  if (viewMode === 'edit' && localEditorContent === null) {
-      console.log('[MainContent] Warning: Entering edit mode but localEditorContent is null. Waiting initialization.');
-      // Optional: show a specific loading state for edit mode init
-      // return <div className="flex-grow p-6 text-center">Initializing editor...</div>;
-  }
-
   // --- Handler for Mode Change ---
   const handleModeChange = (newMode: ViewMode | null) => {
-      if (!newMode) return; // Should not happen with single type toggle group
+      if (!newMode || newMode === viewMode) return;
 
       console.log(`[MainContent] Switching mode from ${viewMode} to ${newMode}`);
 
-      // If switching *away* from edit mode, sync local changes to global store
       if (viewMode === 'edit' && newMode !== 'edit' && localEditorContent !== null) {
           console.log("[MainContent] Syncing localEditorContent to global store (setFullDocumentHtml).");
           setFullDocumentHtml(localEditorContent);
       }
 
-      // Reset collapse state logic removed - collapse is independent of mode now
-      // if (newMode !== 'view') {
-      //     setIsHeaderCollapsed(false); // Keep header expanded unless explicitly collapsed
-      // }
-
       setViewMode(newMode);
 
-      // If switching *to* edit mode, ensure local state is initialized (handled by useEffect)
-      if (newMode === 'edit' && localEditorContent === null) {
-           setLocalEditorContent(fullDocumentHtml); // Initialize immediately if needed
-           console.log("[MainContent] Immediately initializing localEditorContent for edit mode on switch.");
-      } else if (newMode !== 'edit' && localEditorContent !== null) {
+      // Reset diff readiness flag when switching modes, it will be re-evaluated by useEffect
+      setIsDiffDataReady(false);
+
+      if (newMode === 'edit') {
+          // Ensure local state is initialized or re-initialized if needed
+          setLocalEditorContent(fullDocumentHtml ?? ''); // Initialize with current global or empty
+          console.log("[MainContent] Mode switched to edit. Initializing/resetting localEditorContent.");
+      } else {
           // Clear local state if switching out of edit mode
           setLocalEditorContent(null);
-          console.log("[MainContent] Cleared localEditorContent on mode switch away from edit.");
+          console.log("[MainContent] Mode switched away from edit. Cleared localEditorContent.");
       }
   };
-  // --- END NEW ---
+
+  // --- Determine props for LegislationEditor based on viewMode ---
+  let editorContentToShow: string | null = null;
+  let baseHtmlForEditor: string | null = null;
+  let currentHtmlForEditor: string | null = null;
+
+  switch (viewMode) {
+      case 'view':
+          editorContentToShow = fullDocumentHtml;
+          // No diff needed
+          break;
+      case 'changes':
+          editorContentToShow = finalProposedHtml; // Show the final state with changes
+          if (isDiffDataReady) {
+              baseHtmlForEditor = baseHtmlForDiff; // Original before changes
+              currentHtmlForEditor = finalProposedHtml; // Final state after changes
+          }
+          break;
+      case 'edit':
+          editorContentToShow = localEditorContent; // Show local edits
+          if (isDiffDataReady) {
+              baseHtmlForEditor = baseHtmlForDiff; // Original before changes
+              currentHtmlForEditor = localEditorContent; // Compare against local edits
+          }
+          break;
+  }
+
+  console.log(`[MainContent Props Calculation] Mode: ${viewMode}, isDiffReady: ${isDiffDataReady}`);
+  console.log(` - baseHtmlForEditor: ${baseHtmlForEditor !== null ? baseHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
+  console.log(` - currentHtmlForEditor: ${currentHtmlForEditor !== null ? currentHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
+  console.log(` - editorContentToShow: ${editorContentToShow !== null ? editorContentToShow.substring(0, 50) + '...' : 'null'}`);
 
   // --- Main Render ---
   return (
@@ -466,18 +477,22 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
              )}
 
             {/* --- Display Changes Loading/Error (Only if header NOT collapsed) --- */}
-             {(viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges && (
-                <div className="text-sm text-gray-500 dark:text-gray-400 my-2 flex items-center">
-                    <Loader2 className="animate-spin h-4 w-4 mr-2" /> Loading changes...
-                </div>
-             )}
-             {(viewMode === 'changes' || viewMode === 'edit') && changesError && (
+             {(viewMode === 'changes' || viewMode === 'edit') && !isLoadingChanges && changesError && (
                  <Alert variant="destructive" className="my-2">
                     {/* ... alert content ... */}
                     <AlertCircle className="h-4 w-4" />
                      <AlertTitle>Error Loading Changes</AlertTitle>
                      <AlertDescription>{changesError}</AlertDescription>
                  </Alert>
+             )}
+             {/* Message about pending changes (only if diff data is ready) */}
+             {(viewMode === 'changes' || viewMode === 'edit') && isDiffDataReady && (
+                <div className={`text-sm p-2 rounded mb-2 ${allPendingChanges.length > 0 ? 'bg-yellow-100 dark:bg-yellow-900/50 text-yellow-800 dark:text-yellow-200' : 'bg-green-100 dark:bg-green-900/50 text-green-800 dark:text-green-200'}`}>
+                     {allPendingChanges.length > 0
+                        ? `Displaying ${allPendingChanges.length} pending change(s). Insertions highlighted below.`
+                        : `No pending changes found. Displaying the current version.`
+                     }
+                 </div>
              )}
 
         </div> {/* End of collapsible header area */}
@@ -501,13 +516,14 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
         {/* Its stickiness should now correctly attach to the top of the parent when header is collapsed */}
         {viewMode === 'edit' && (
             <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 py-1 px-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
-                {editorInstance && (
+                {editorInstance ? (
                     <LegislationToolbar
                         editor={editorInstance}
                         onAddCommentClick={handleToolbarAddCommentClick}
                     />
+                ) : (
+                   <div className="h-10 flex items-center text-sm text-gray-400">Toolbar loading...</div>
                 )}
-                {!editorInstance && <div className="h-10 flex items-center text-sm text-gray-400">Toolbar loading...</div>}
             </div>
         )}
 
@@ -520,44 +536,23 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
         >
             {/* Single Editor for the whole document */}
             <div className="flex-grow">
-              { (viewMode === 'changes' || viewMode === 'edit') && baseHtmlForDiff !== null ? (
-                  <div className={`border rounded p-4 ${allPendingChanges.length > 0 ? 'bg-yellow-50 dark:bg-gray-800 border-yellow-200 dark:border-yellow-700' : 'bg-gray-50 dark:bg-gray-800'}`}>
-                      {allPendingChanges.length > 0 && (
-                          <>
-                              <h3 className="text-lg font-semibold mb-2 text-gray-800 dark:text-gray-200">Pending Changes Overview</h3>
-                              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                                  Found {allPendingChanges.length} pending change(s). Differences from the original version may be highlighted below.
-                              </p>
-                          </>
-                      )}
-                      {allPendingChanges.length === 0 && (
-                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                              No pending changes found. Viewing current document state.
-                          </p>
-                      )}
-                      <LegislationEditor
-                          content={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
-                          editable={viewMode === 'edit'}
-                          onChange={viewMode === 'edit' ? setLocalEditorContent : undefined}
-                          onAddCommentClick={viewMode === 'edit' ? handleToolbarAddCommentClick : undefined}
-                          onEditorReady={handleEditorReady}
-                          showToolbar={false}
-                          baseHtmlForDiff={baseHtmlForDiff}
-                          currentHtmlForDiff={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
-                      />
-                  </div>
-              ) : (
-                  // View mode OR Edit/Changes mode before base diff loaded
+              {isEditorReadyForDisplay ? (
                   <LegislationEditor
-                      content={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
+                      // Use the derived content variable
+                      content={editorContentToShow}
                       editable={viewMode === 'edit'}
                       onChange={viewMode === 'edit' ? setLocalEditorContent : undefined}
                       onAddCommentClick={viewMode === 'edit' ? handleToolbarAddCommentClick : undefined}
                       onEditorReady={handleEditorReady}
-                      showToolbar={false}
-                      baseHtmlForDiff={null}
-                      currentHtmlForDiff={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
+                      showToolbar={false} // Toolbar is handled above
+                      // Pass diff props only when ready
+                      baseHtmlForDiff={baseHtmlForEditor}
+                      currentHtmlForDiff={currentHtmlForEditor}
                   />
+              ) : (
+                  // This case should ideally be caught by the top-level isLoading check,
+                  // but acts as a fallback if something unexpected happens.
+                  <SkeletonLoader message="Preparing editor..." />
               )}
             </div>
         </div>

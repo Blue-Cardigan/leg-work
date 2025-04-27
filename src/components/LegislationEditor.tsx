@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useEditor, EditorContent, NodeViewWrapper, NodeViewProps, ReactNodeViewRenderer } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
@@ -348,6 +348,13 @@ const mapCharIndexToPos = (doc: ProseMirrorNode, charIndex: number, assoc: -1 | 
 };
 // --- End Helper ---
 
+// Add type declaration for the window object
+declare global {
+  interface Window {
+    addContextToChat?: (text: string, startLine: number, endLine: number) => void;
+  }
+}
+
 const LegislationEditor: React.FC<LegislationEditorProps> = ({ 
     content, 
     editable = true, 
@@ -501,6 +508,25 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     // --- END NEW ---
   });
 
+  // --- NEW: Effect to update editor content when currentHtmlForDiff prop changes ---
+  useEffect(() => {
+    if (!editor || !currentHtmlForDiff) {
+      return; // Editor not ready or no current HTML
+    }
+
+    const editorHtml = editor.getHTML();
+
+    // Only update if the prop is different from the editor's current content
+    if (currentHtmlForDiff !== editorHtml) {
+      console.log("[LegislationEditor Effect] Updating editor content from currentHtmlForDiff prop.");
+      // Use `setContent` to update the editor state.
+      // `emitUpdate: false` prevents the `onUpdate` callback from firing unnecessarily,
+      // as this change originates from a prop, not a user edit.
+      editor.commands.setContent(currentHtmlForDiff, false); 
+    }
+  }, [currentHtmlForDiff, editor]); // Depend on prop and editor instance
+  // --- END NEW EFFECT ---
+
   // Ensure editor is destroyed on unmount
   React.useEffect(() => {
     return () => {
@@ -525,11 +551,13 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
   }
 
   return (
-    <div className="tiptap-editor-wrapper">
-      {/* Conditionally render the toolbar based on the prop */}
-      {editable && showToolbar && onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={onAddCommentClick} />}
-      {/* Conditionally render toolbar *without* comment button if callback not provided */}
-      {editable && showToolbar && !onAddCommentClick && <LegislationToolbar editor={editor} onAddCommentClick={() => console.warn("onAddCommentClick not provided to LegislationEditor")} />}
+    <div className="relative">
+      {editor && showToolbar && (
+        <LegislationToolbar 
+          editor={editor} 
+          onAddCommentClick={onAddCommentClick || (() => console.warn("onAddCommentClick not provided to LegislationEditor"))} 
+        />
+      )}
       <EditorContent editor={editor} />
     </div>
   );

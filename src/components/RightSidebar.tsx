@@ -4,7 +4,6 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 // --- Updated Store Imports --- 
 import { 
   useAppStore, 
-  ChatMessagePart, 
   Comment,
   useRightSidebarContent, // What content to show
   useIsRightSidebarOpen, // <-- NEW: Get visibility state
@@ -19,9 +18,10 @@ import {
 } from '@/lib/store/useAppStore'; 
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Loader2, Send, X, AlertCircle } from 'lucide-react'; // Icons
+import { Loader2, X, AlertCircle } from 'lucide-react'; // Icons
 import { formatDistanceToNow } from 'date-fns'; // For relative timestamps
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import ChatSidebar from './ChatSidebar'; // Import the new ChatSidebar component
 
 // --- Comment Card Component --- 
 interface CommentCardProps {
@@ -132,9 +132,6 @@ const CommentInput: React.FC<CommentInputProps> = ({ markId, legislationId, onSu
 export default function RightSidebar() {
   // --- Store State & Actions --- 
   const {
-    chatMessages,
-    isChatLoading,
-    sendChatMessage,
     selectedLegislation // Needed for comment submission
   } = useAppStore();
   // Get state for content switching
@@ -155,35 +152,7 @@ export default function RightSidebar() {
       setFocusedMarkId 
   } = useCommentActions();
 
-  // Local state for chat input
-  const [chatInput, setChatInput] = useState('');
-  const chatContainerRef = useRef<HTMLDivElement>(null);
   const commentsContainerRef = useRef<HTMLDivElement>(null);
-
-  // Scroll chat to bottom
-  useEffect(() => {
-    if (rightSidebarContent === 'chat' && chatContainerRef.current) {
-      chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
-    }
-  }, [chatMessages, rightSidebarContent]);
-
-  // Scroll comments to focused comment
-  // (CommentCard handles scrolling itself into view when focused)
-
-  // --- Chat Handlers --- 
-  const handleChatSend = async () => {
-    if (!chatInput.trim() || isChatLoading) return;
-    const messageToSend = chatInput;
-    setChatInput('');
-    await sendChatMessage(messageToSend);
-  };
-
-  const handleChatKeyPress = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleChatSend();
-    }
-  };
 
   // --- Comment Handlers --- 
   const handleCommentSubmit = useCallback(async (text: string) => {
@@ -232,48 +201,7 @@ export default function RightSidebar() {
       {/* Conditional Content Area */} 
       {rightSidebarContent === 'chat' ? (
           // --- Chat UI --- 
-          <>
-              <div ref={chatContainerRef} className="flex-grow bg-white dark:bg-gray-800 mb-2 overflow-y-auto p-3 space-y-3">
-                  {Array.isArray(chatMessages) && chatMessages.map((msg, index) => (
-                      <div key={index} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                          <div className={`max-w-[85%] p-2 px-3 rounded-lg text-sm shadow-sm ${msg.role === 'user' ? 'bg-blue-500 dark:bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100'}`}>
-                              {Array.isArray(msg.parts) && msg.parts.length > 0 ? (
-                                  msg.parts.map((part: ChatMessagePart, i: number) => (
-                                      <span key={i} style={{ whiteSpace: 'pre-wrap' }}>{part?.text ?? ''}</span>
-                                  ))
-                              ) : (
-                                  <span className="italic text-gray-400">...</span>
-                              )}
-                          </div>
-                      </div>
-                  ))}
-                  {isChatLoading && Array.isArray(chatMessages) && chatMessages.length > 0 && chatMessages[chatMessages.length - 1]?.role === 'user' && (
-                      <div className="flex justify-start">
-                          <div className="max-w-[80%] p-2 px-3 rounded-lg text-sm bg-gray-200 dark:bg-gray-700 text-gray-900 dark:text-gray-100 italic shadow-sm">
-                              Thinking...
-                          </div>
-                      </div>
-                  )}
-              </div>
-              <div className="flex items-center border-t border-gray-200 dark:border-gray-700 p-3">
-                  <input
-                      type="text"
-                      placeholder={isChatLoading ? "Waiting for response..." : "Ask Gemini..."}
-                      value={chatInput}
-                      onChange={(e) => setChatInput(e.target.value)}
-                      onKeyPress={handleChatKeyPress}
-                      disabled={isChatLoading}
-                      className="flex-grow border border-gray-300 dark:border-gray-600 rounded-l p-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500 dark:bg-gray-700 dark:text-gray-100 disabled:bg-gray-200 dark:disabled:bg-gray-600"
-                  />
-                  <Button
-                      onClick={handleChatSend}
-                      disabled={isChatLoading || !chatInput.trim()}
-                      className="bg-blue-500 text-white px-4 h-[40px] py-2 rounded-r text-sm font-medium hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed dark:bg-blue-600 dark:hover:bg-blue-700"
-                  >
-                      <Send className="h-4 w-4" />
-                  </Button>
-              </div>
-          </>
+          <ChatSidebar />
       ) : (
           // --- Comments UI --- 
           <div ref={commentsContainerRef} className="flex-grow bg-white dark:bg-gray-800 overflow-y-auto p-3 space-y-3">

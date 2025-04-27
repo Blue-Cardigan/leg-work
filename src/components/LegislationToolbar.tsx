@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useCallback } from 'react';
 import type { Editor } from '@tiptap/react';
 import { v4 as uuidv4 } from 'uuid'; // Import uuid
 
@@ -16,6 +16,7 @@ import {
   Undo as IconUndo,
   Redo as IconRedo,
   MessageSquarePlus as IconCommentAdd,
+  MessageSquareShare as IconAddToChat
 } from 'lucide-react'; // Using lucide-react, adjust if using different icons
 
 interface LegislationToolbarProps {
@@ -70,6 +71,62 @@ const LegislationToolbar: React.FC<LegislationToolbarProps> = ({ editor, onAddCo
         // Optionally provide user feedback here
     }
   };
+
+  // --- NEW: Function to handle adding text to chat --- 
+  const handleAddToChat = useCallback(() => {
+    if (!editor) return;
+
+    const { state } = editor;
+    const { from, to } = state.selection;
+
+    if (from === to) return; // No selection
+
+    const selectedText = state.doc.textBetween(from, to);
+
+    // Calculate line numbers (approximate)
+    let startLine = 1;
+    let endLine = 1;
+    let lineCount = 1;
+    
+    state.doc.nodesBetween(0, from, (node, pos) => {
+      // Check if it's the start of a block node that isn't the first node
+      if (pos > 0 && (node.type.name === 'paragraph' || node.type.name === 'heading')) {
+        lineCount++;
+      }
+      return true; // Continue traversal
+    });
+    
+    startLine = lineCount;
+    
+    state.doc.nodesBetween(from, to, (node, pos) => {
+      // Count line breaks within the selection
+      if (node.type.name === 'paragraph' || node.type.name === 'heading') {
+         // Only count if it's not the very start of the selection unless it's the only block
+         if (pos > from || from === to) { 
+            lineCount++;
+         }
+      }
+      return true; // Continue traversal
+    });
+    
+    // Adjust end line calculation: lineCount now represents the *next* line number after the selection
+    endLine = lineCount > startLine ? lineCount -1 : startLine; 
+
+    // Call the global function exposed by ChatSidebar
+    if (window.addContextToChat) {
+      window.addContextToChat(
+        selectedText,
+        startLine,
+        endLine
+      );
+      console.log(`[Toolbar] Added to chat context: "${selectedText.substring(0,30)}..." (Lines ${startLine}-${endLine})`);
+      // Optional: Clear editor selection after adding to chat
+      // editor.chain().focus().setTextSelection({ from: to, to: to }).run();
+    } else {
+      console.warn("[Toolbar] window.addContextToChat function not found.");
+    }
+  }, [editor]);
+  // --- End NEW Function --- 
 
   return (
     <div className="toolbar-wrapper sticky top-0 z-20 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-t p-1 mb-1 flex flex-wrap items-center">
@@ -145,6 +202,13 @@ const LegislationToolbar: React.FC<LegislationToolbarProps> = ({ editor, onAddCo
         title="Add Comment"
       >
         <IconCommentAdd size={18} />
+      </ToolbarButton>
+      
+      <ToolbarButton
+        onClick={handleAddToChat}
+        title="Add Selection to Chat Context"
+      >
+        <IconAddToChat size={18} />
       </ToolbarButton>
        
        <span className="border-l border-gray-300 dark:border-gray-600 h-5 mx-1.5"></span>
