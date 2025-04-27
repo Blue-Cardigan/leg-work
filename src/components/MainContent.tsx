@@ -5,12 +5,13 @@ import { useAppStore, TocItem, LegislationContent, Comment } from '@/lib/store/u
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle } from "lucide-react"; // Removed MessageSquare, added Loader2, Eye, Pencil, GitCompareArrows, X
+import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown } from "lucide-react"; // Added ChevronUp/Down
 import { useInView } from 'react-intersection-observer'; // Import useInView
 import CommentInputSidebar from './CommentInputSidebar';
 import { Editor } from '@tiptap/core';
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
 import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
+import { Button } from "@/components/ui/button"; // Import Button for collapse toggle
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -94,6 +95,24 @@ interface ProposedChange {
 }
 // --- END ProposedChange Type ---
 
+// --- NEW: Simple Skeleton Loader Component ---
+const SkeletonLoader: React.FC = () => (
+    <div className="space-y-4 p-6 animate-pulse">
+      <div className="h-6 bg-gray-300 dark:bg-gray-700 rounded w-3/4"></div>
+      <div className="space-y-2">
+        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded"></div>
+        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-5/6"></div>
+        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-4/6"></div>
+      </div>
+       <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-1/2 mt-4"></div>
+       <div className="space-y-2 pt-4">
+        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded"></div>
+        <div className="h-4 bg-gray-300 dark:bg-gray-700 rounded w-5/6"></div>
+      </div>
+    </div>
+  );
+// --- END Skeleton Loader ---
+
 export default function MainContent({ }: MainContentProps) { // Props might be empty now
   const {
     selectedLegislation,
@@ -109,6 +128,10 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     // Removed state/actions related to buttons moved to LeftSidebar:
     // hasUnsavedChanges, submitChangesForReview, resetContent, isCommentSidebarOpen, comments
   } = useAppStore();
+
+  // --- NEW: Local state for editor content during editing ---
+  const [localEditorContent, setLocalEditorContent] = useState<string | null>(null);
+  // --- END NEW ---
 
   // State for managing the comment *input* sidebar specifically
   const [showCommentInputFor, setShowCommentInputFor] = useState<string | null>(null);
@@ -251,6 +274,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   const [isLoadingChanges, setIsLoadingChanges] = useState<boolean>(false);
   const [changesError, setChangesError] = useState<string | null>(null);
   const [baseHtmlForDiff, setBaseHtmlForDiff] = useState<string | null>(null); // New state for base HTML
+  // --- NEW: Collapse state for HEADER area --- Renamed from isEditorCollapsed
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
   // --- END NEW ---
 
   // --- NEW: Extract Explanatory Note ---
@@ -281,6 +306,27 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     }
   }, [fullDocumentHtml, viewMode]);
   // --- END NEW ---
+
+  // --- NEW: Sync local state when entering edit mode or when global HTML changes ---
+  useEffect(() => {
+      if (viewMode === 'edit') {
+          // Initialize local state when entering edit mode
+          if (localEditorContent === null) { // Only initialize if not already set
+              setLocalEditorContent(fullDocumentHtml);
+              console.log("[MainContent] Initialized localEditorContent for edit mode.");
+          }
+      } else {
+           // Clear local state when leaving edit mode
+           if (localEditorContent !== null) {
+                setLocalEditorContent(null);
+                console.log("[MainContent] Cleared localEditorContent.");
+           }
+      }
+      // If the global HTML changes *while not* in edit mode, ensure local state is cleared
+      // (e.g., switching legislation resets everything)
+      // However, if global HTML changes *while* in edit mode (e.g., due to external update/reset),
+      // we might need a strategy (prompt user? discard local changes?). For now, let's keep local changes.
+  }, [viewMode, fullDocumentHtml]); // Rerun when mode or global HTML changes
 
   // --- Fetch ALL Pending Changes ---
   useEffect(() => {
@@ -356,10 +402,14 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   if (isLoadingContent) {
     return (
       <div className="flex-grow p-6 flex items-center justify-center bg-white dark:bg-gray-900">
+        {/* Use Skeleton Loader during initial load as well for consistency */}
+        <SkeletonLoader />
+        {/* Original Loader Text:
         <div className="text-center text-gray-500 dark:text-gray-400">
           <Loader2 className="animate-spin h-8 w-8 text-blue-500 mx-auto mb-2" />
           Loading content...
         </div>
+        */}
       </div>
     );
   }
@@ -369,25 +419,99 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     return <div className="flex-grow p-6 text-center text-gray-500 dark:text-gray-400 bg-white dark:bg-gray-900">Select legislation from the sidebar to view its content.</div>;
   }
 
-  // --- No Content State ---
-  if (fullDocumentHtml === null) { // Check combined HTML state
-      console.log('[MainContent] Error: fullDocumentHtml is null after loading.');
-      return <div className="flex-grow p-6 text-center text-gray-400 bg-white dark:bg-gray-900">No content available or failed to load for this item.</div>;
+  // --- No Content State (After Loading) ---
+  // Render Skeleton instead of text if content is null after load attempt
+  if (fullDocumentHtml === null && viewMode !== 'edit') {
+      console.log('[MainContent] Error: fullDocumentHtml is null after loading (not in edit mode). Showing skeleton.');
+      // Return the skeleton loader within the basic header structure
+      return (
+        <div className="flex-grow flex flex-col bg-white dark:bg-gray-900 relative h-full">
+            {/* Render Header Area (potentially collapsed) even when showing skeleton */}
+            <div className={`flex-shrink-0 overflow-hidden transition-all duration-300 ease-in-out ${isHeaderCollapsed ? 'max-h-0 p-0 mb-0 invisible opacity-0' : 'p-6 pb-2 visible opacity-100'}`}>
+                <div className="flex justify-between items-center mb-3">
+                    <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{selectedLegislation.title}</h1>
+                     {/* Collapse button position might need adjustment here - placing it with toggles */}
+                </div>
+                 <div className="mb-3 flex justify-between items-center">
+                     <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { handleModeChange(value as ViewMode) }} size="sm">
+                          {/* Toggle Items - placeholder */}
+                           <ToggleGroupItem value="view" aria-label="View mode"><Eye className="h-4 w-4 mr-1" /> View</ToggleGroupItem>
+                           <ToggleGroupItem value="changes" aria-label="View changes mode"><GitCompareArrows className="h-4 w-4 mr-1" /> Changes</ToggleGroupItem>
+                           <ToggleGroupItem value="edit" aria-label="Edit mode"><Pencil className="h-4 w-4 mr-1" /> Edit</ToggleGroupItem>
+                     </ToggleGroup>
+                     <Button
+                         variant="ghost"
+                         size="sm"
+                         onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+                         aria-label={isHeaderCollapsed ? "Expand header" : "Collapse header"}
+                     >
+                         {isHeaderCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+                     </Button>
+                 </div>
+            </div>
+            {/* Show Skeleton in the main area */}
+            <div className="flex-grow overflow-y-auto">
+                <SkeletonLoader />
+            </div>
+        </div>
+      );
   }
+
+  // Allow rendering editor in edit mode even if global HTML was initially null, using local state
+  if (viewMode === 'edit' && localEditorContent === null) {
+      console.log('[MainContent] Warning: Entering edit mode but localEditorContent is null. Waiting initialization.');
+      // Optional: show a specific loading state for edit mode init
+      // return <div className="flex-grow p-6 text-center">Initializing editor...</div>;
+  }
+
+  // --- Handler for Mode Change ---
+  const handleModeChange = (newMode: ViewMode | null) => {
+      if (!newMode) return; // Should not happen with single type toggle group
+
+      console.log(`[MainContent] Switching mode from ${viewMode} to ${newMode}`);
+
+      // If switching *away* from edit mode, sync local changes to global store
+      if (viewMode === 'edit' && newMode !== 'edit' && localEditorContent !== null) {
+          console.log("[MainContent] Syncing localEditorContent to global store (setFullDocumentHtml).");
+          setFullDocumentHtml(localEditorContent);
+      }
+
+      // Reset collapse state logic removed - collapse is independent of mode now
+      // if (newMode !== 'view') {
+      //     setIsHeaderCollapsed(false); // Keep header expanded unless explicitly collapsed
+      // }
+
+      setViewMode(newMode);
+
+      // If switching *to* edit mode, ensure local state is initialized (handled by useEffect)
+      if (newMode === 'edit' && localEditorContent === null) {
+           setLocalEditorContent(fullDocumentHtml); // Initialize immediately if needed
+           console.log("[MainContent] Immediately initializing localEditorContent for edit mode on switch.");
+      } else if (newMode !== 'edit' && localEditorContent !== null) {
+          // Clear local state if switching out of edit mode
+          setLocalEditorContent(null);
+          console.log("[MainContent] Cleared localEditorContent on mode switch away from edit.");
+      }
+  };
+  // --- END NEW ---
 
   // --- Main Render ---
   return (
     // Outer container - NOT scrollable, controls overall flex layout
     <div className="flex-grow flex flex-col bg-white dark:bg-gray-900 relative h-full">
 
-        {/* Header Area (Non-Scrolling) */}
-        <div className="p-6 pb-2 flex-shrink-0"> {/* Adjusted padding */}
+        {/* Header Area (Non-Scrolling, but now collapsible) */}
+        {/* Apply collapse styles to this container */}
+        <div className={`flex-shrink-0 overflow-hidden transition-all duration-300 ease-in-out ${isHeaderCollapsed ? 'max-h-0 p-0 mb-0 invisible opacity-0' : 'p-6 pb-2 visible opacity-100'}`}>
             {/* Document Title */}
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100 mb-3">{selectedLegislation.title}</h1>
+            <div className="flex justify-between items-center mb-3">
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">{selectedLegislation.title}</h1>
+                 {/* Collapse button moved below to be alongside toggles */}
+            </div>
 
-            {/* --- NEW: View Mode Toggle --- */}
+            {/* --- View Mode Toggle & Collapse Button --- */}
             <div className="mb-3 flex justify-between items-center">
-                 <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { if (value) setViewMode(value as ViewMode) }} size="sm">
+                 <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { handleModeChange(value as ViewMode) }} size="sm">
                     <ToggleGroupItem value="view" aria-label="View mode">
                         <Eye className="h-4 w-4 mr-1" /> View
                     </ToggleGroupItem>
@@ -398,14 +522,24 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                          <Pencil className="h-4 w-4 mr-1" /> Edit
                     </ToggleGroupItem>
                 </ToggleGroup>
-                {/* Optional: Add other controls here if needed */}
+                 {/* --- NEW: Collapse Toggle Button (Always Visible) --- */}
+                 <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsHeaderCollapsed(!isHeaderCollapsed)}
+                    aria-label={isHeaderCollapsed ? "Expand header" : "Collapse header"}
+                 >
+                    {isHeaderCollapsed ? <ChevronDown className="h-5 w-5" /> : <ChevronUp className="h-5 w-5" />}
+                 </Button>
+                 {/* --- END NEW --- */}
             </div>
-            {/* --- END NEW --- */}
+            {/* --- END View Mode Toggle & Collapse Button --- */}
 
             {/* Submission Status Alert */}
             {submitStatus && (
                <Alert className={`mb-3 ${submitStatus.type === 'error' ? 'border-red-500 text-red-700 dark:text-red-400 dark:border-red-600' : 'border-green-500 text-green-700 dark:text-green-400 dark:border-green-600'}`}>
-                <Terminal className="h-4 w-4" />
+                 {/* ... alert content ... */}
+                 <Terminal className="h-4 w-4" />
                 <AlertTitle>{submitStatus.type === 'success' ? 'Success' : 'Error'}</AlertTitle>
                 <AlertDescription>
                   {submitStatus.message}
@@ -413,13 +547,13 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
               </Alert>
           )}
 
-            {/* --- NEW: Explanatory Note Display (View Mode Only) --- */}
+            {/* --- Explanatory Note Display (Only if header NOT collapsed) --- */}
             {viewMode === 'view' && explanatoryNoteHtml && isExplanatoryNoteVisible && (
                  <Alert variant="default" className="mb-3 border-blue-300 dark:border-blue-700 bg-blue-50 dark:bg-gray-800 relative">
+                     {/* ... alert content ... */}
                      <AlertCircle className="h-4 w-4 text-blue-600 dark:text-blue-400" />
                      <AlertTitle className="text-blue-800 dark:text-blue-300">Explanatory Note</AlertTitle>
                      <AlertDescription className="prose dark:prose-invert max-w-none text-sm text-gray-700 dark:text-gray-300">
-                          {/* Render the extracted HTML */}
                           <div dangerouslySetInnerHTML={{ __html: explanatoryNoteHtml }} />
                      </AlertDescription>
                      <button
@@ -431,9 +565,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                      </button>
                  </Alert>
              )}
-             {/* --- END NEW --- */}
 
-            {/* --- NEW: Display Changes Loading/Error --- */}
+            {/* --- Display Changes Loading/Error (Only if header NOT collapsed) --- */}
              {(viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges && (
                 <div className="text-sm text-gray-500 dark:text-gray-400 my-2 flex items-center">
                     <Loader2 className="animate-spin h-4 w-4 mr-2" /> Loading changes...
@@ -441,17 +574,32 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
              )}
              {(viewMode === 'changes' || viewMode === 'edit') && changesError && (
                  <Alert variant="destructive" className="my-2">
-                     <AlertCircle className="h-4 w-4" />
+                    {/* ... alert content ... */}
+                    <AlertCircle className="h-4 w-4" />
                      <AlertTitle>Error Loading Changes</AlertTitle>
                      <AlertDescription>{changesError}</AlertDescription>
                  </Alert>
              )}
-            {/* --- END NEW --- */}
 
-        </div>
+        </div> {/* End of collapsible header area */}
+
+         {/* --- NEW: Floating Expand Header Button --- */}
+        {isHeaderCollapsed && (
+            <Button
+                variant="ghost"
+                size="icon" // Use icon size for a compact button
+                onClick={() => setIsHeaderCollapsed(false)}
+                aria-label="Expand header"
+                className="absolute top-2 right-4 z-20 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200" // Positioned top-right
+            >
+                <ChevronDown className="h-6 w-6" />
+            </Button>
+        )}
+        {/* --- END NEW --- */}
 
         {/* --- Sticky Toolbar Area (Non-Scrolling) --- */}
-        {/* Only show toolbar in Edit mode */}
+        {/* Only show toolbar in Edit mode - Remains visible even if header above is collapsed */}
+        {/* Its stickiness should now correctly attach to the top of the parent when header is collapsed */}
         {viewMode === 'edit' && (
             <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 py-1 px-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
                 {editorInstance && (
@@ -465,10 +613,14 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
         )}
 
         {/* --- Scrollable Editor Area --- */}
-        {/* Adjust padding top if toolbar is not visible */}
-        <div ref={mainContentRef} className={`flex-grow overflow-y-auto p-6 ${viewMode === 'edit' ? 'pt-2' : 'pt-4'} scroll-smooth`}>
+        {/* Removed collapse styling from here */}
+        {/* Padding top adjusted based on edit mode (toolbar presence), not collapse state */}
+        <div
+            ref={mainContentRef}
+            className={`flex-grow overflow-y-auto p-6 ${viewMode === 'edit' ? 'pt-2' : 'pt-4'} scroll-smooth`}
+        >
             {/* Single Editor for the whole document */}
-            <div className="flex-grow"> {/* Removed prose class, Tiptap usually handles this */}
+            <div className="flex-grow">
               { (viewMode === 'changes' || viewMode === 'edit') && baseHtmlForDiff !== null ? (
                   <div className={`border rounded p-4 ${allPendingChanges.length > 0 ? 'bg-yellow-50 dark:bg-gray-800 border-yellow-200 dark:border-yellow-700' : 'bg-gray-50 dark:bg-gray-800'}`}>
                       {allPendingChanges.length > 0 && (
@@ -485,29 +637,27 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                           </p>
                       )}
                       <LegislationEditor
-                          content={fullDocumentHtml} // Always show current state in editor view
+                          content={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
                           editable={viewMode === 'edit'}
-                          onChange={viewMode === 'edit' ? setFullDocumentHtml : undefined}
-                          onAddCommentClick={handleToolbarAddCommentClick}
+                          onChange={viewMode === 'edit' ? setLocalEditorContent : undefined}
+                          onAddCommentClick={viewMode === 'edit' ? handleToolbarAddCommentClick : undefined}
                           onEditorReady={handleEditorReady}
                           showToolbar={false}
-                          // Pass props for diffing
                           baseHtmlForDiff={baseHtmlForDiff}
-                          currentHtmlForDiff={fullDocumentHtml}
+                          currentHtmlForDiff={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
                       />
                   </div>
               ) : (
-                  // View mode OR Edit/Changes mode before changes/base are loaded
+                  // View mode OR Edit/Changes mode before base diff loaded
                   <LegislationEditor
-                      content={fullDocumentHtml}
+                      content={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
                       editable={viewMode === 'edit'}
-                      onChange={viewMode === 'edit' ? setFullDocumentHtml : undefined}
-                      onAddCommentClick={handleToolbarAddCommentClick}
+                      onChange={viewMode === 'edit' ? setLocalEditorContent : undefined}
+                      onAddCommentClick={viewMode === 'edit' ? handleToolbarAddCommentClick : undefined}
                       onEditorReady={handleEditorReady}
                       showToolbar={false}
-                      // No diffing needed here
                       baseHtmlForDiff={null}
-                      currentHtmlForDiff={fullDocumentHtml}
+                      currentHtmlForDiff={viewMode === 'edit' ? localEditorContent : fullDocumentHtml}
                   />
               )}
             </div>

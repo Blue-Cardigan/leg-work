@@ -16,7 +16,8 @@ export async function POST(
     { params }: { params: { identifier: string[] } }
 ): Promise<NextResponse<ResponseData>> {
 
-    const identifierParts = await params.identifier;
+    const resolvedParams = await params; // Await params here
+    const identifierParts = resolvedParams.identifier; // Access identifier from the resolved params
 
     // Check if the last segment indicates the 'submit' action
     if (!identifierParts || identifierParts.length === 0 || identifierParts[identifierParts.length - 1] !== 'submit') {

@@ -361,6 +361,12 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
   // Initialize diff-match-patch instance
   const dmp = useMemo(() => new diff_match_patch(), []);
 
+  const focusedMarkId = useAppStore((state) => state.focusedMarkId); // Get focused ID
+
+  // --- Add Logging for Props Received ---
+  console.log(`[LegislationEditor Render] Props received - Editable: ${editable}, BaseHTML null?: ${baseHtmlForDiff === null}, CurrentHTML null?: ${currentHtmlForDiff === null}, Base === Current?: ${baseHtmlForDiff === currentHtmlForDiff}`);
+  // --- End Logging ---
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -398,6 +404,7 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     },
     // --- Call onEditorReady when the editor is created ---
     onCreate: ({ editor }) => {
+      console.log("[LegislationEditor onCreate] Editor created.");
       if (onEditorReady) {
         onEditorReady(editor);
       }
@@ -414,60 +421,80 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
             const decorations: Decoration[] = [];
             const doc = state.doc;
 
-            // --- Diff Calculation ---
-            if (baseHtmlForDiff !== null && currentHtmlForDiff !== null && baseHtmlForDiff !== currentHtmlForDiff) {
-                const baseText = convertHtmlToPlainText(baseHtmlForDiff ?? null);
-                const currentText = convertHtmlToPlainText(currentHtmlForDiff ?? null);
+            // --- Refined Logging Inside Decorations ---
+            const isBaseHtmlPresent = baseHtmlForDiff !== null;
+            const isCurrentHtmlPresent = currentHtmlForDiff !== null;
+            const areHtmlStringsDifferent = isBaseHtmlPresent && isCurrentHtmlPresent && baseHtmlForDiff !== currentHtmlForDiff;
 
-                // Ensure text differs to avoid unnecessary diffing
-                if (baseText !== currentText) {
-                    console.log("[LegislationEditor] Calculating diff...");
+            console.log(`[Decorations Fn] BasePresent: ${isBaseHtmlPresent}, CurrentPresent: ${isCurrentHtmlPresent}, HTMLs Different: ${areHtmlStringsDifferent}`);
+            // Optional: Log snippets for verification
+            // console.log(`[Decorations Fn] Base HTML Snippet: ${baseHtmlForDiff?.substring(0, 100)}...`);
+            // console.log(`[Decorations Fn] Current HTML Snippet: ${currentHtmlForDiff?.substring(0, 100)}...`);
+
+            // Check if diffing should proceed
+            if (areHtmlStringsDifferent) {
+                 console.log("[Decorations Fn] HTML strings are different. Proceeding to text conversion.");
+                 const baseText = convertHtmlToPlainText(baseHtmlForDiff || null); // Already checks for null inside
+                 const currentText = convertHtmlToPlainText(currentHtmlForDiff || null);
+                 const areTextsDifferent = baseText !== currentText;
+
+                 console.log(`[Decorations Fn] Base Text: "${baseText.substring(0,100)}..."`);
+                 console.log(`[Decorations Fn] Current Text: "${currentText.substring(0,100)}..."`);
+                 console.log(`[Decorations Fn] Plain texts different: ${areTextsDifferent}`);
+
+                 if (areTextsDifferent) {
+                    console.log("[Decorations Fn] Calculating diffs with dmp...");
                     const diffs = dmp.diff_main(baseText, currentText);
-                    dmp.diff_cleanupSemantic(diffs); // Improve diff quality
+                    dmp.diff_cleanupSemantic(diffs);
 
-                    let currentTextCharIndex = 0; // Track position in the *current* text
+                    let currentTextCharIndex = 0;
 
                     diffs.forEach(([op, text]) => {
                         if (op === DIFF_INSERT) {
                             const startIndex = currentTextCharIndex;
                             const endIndex = currentTextCharIndex + text.length;
-                            // Map char indices to ProseMirror positions
-                            const from = mapCharIndexToPos(doc, startIndex, 1); // Associate with char after start index
-                            const to = mapCharIndexToPos(doc, endIndex, -1);   // Associate with char before end index
+                            const from = mapCharIndexToPos(doc, startIndex, 1);
+                            const to = mapCharIndexToPos(doc, endIndex, -1);
 
                             if (from !== null && to !== null && from < to) {
-                                 console.log(`[Diff] INSERT: "${text}" from ${from} to ${to}`);
+                                 console.log(`[Decorations Fn] INSERT: "${text}" from ${from} to ${to}`);
                                  decorations.push(
-                                     Decoration.inline(from, to, {
-                                         class: 'change-highlight change-insert',
-                                         'data-diff-type': 'insert',
-                                     })
+                                     Decoration.inline(from, to, { class: 'change-highlight change-insert' })
                                  );
                             } else {
-                                console.warn(`[Diff] Could not map INSERT indices: ${startIndex}-${endIndex} to positions ${from}-${to}`);
+                                console.warn(`[Decorations Fn] Could not map INSERT indices: ${startIndex}-${endIndex} to positions ${from}-${to} for text: "${text}"`);
                             }
-                            currentTextCharIndex += text.length; // Advance index in current text
+                            currentTextCharIndex += text.length;
                         } else if (op === DIFF_DELETE) {
-                            // Deletions don't exist in the current text, but we might want to mark
-                            // the position *where* they were deleted. This is tricky.
-                            // For simplicity, we'll focus on highlighting insertions for now.
-                            // To show deletions, you might need a different approach, like
-                            // rendering the *base* text and highlighting deletions in it,
-                            // or using widgets at the deletion position in the *current* text.
-                            console.log(`[Diff] DELETE: "${text}" (Highlighting not implemented)`);
-                            // No change to currentTextCharIndex as deletion isn't in current text
+                            // Still skipping deletion highlighting for now
+                            console.log(`[Decorations Fn] DELETE: "${text}" (Highlighting not implemented)`);
                         } else if (op === DIFF_EQUAL) {
-                            // Advance index in current text
                             currentTextCharIndex += text.length;
                         }
                     });
-                }
+                 } else {
+                     console.log("[Decorations Fn] Plain text versions are identical. No diff needed.");
+                 }
+            } else {
+                // This log should explain why diffing didn't happen
+                 console.log("[Decorations Fn] No diffing needed (base/current missing or HTML strings are identical).");
             }
-            // --- End Diff Calculation ---
+            // --- End Refined Logging ---
 
-            // --- Add Comment Focus Decoration (Optional - might be handled by mark styles) ---
-            // if (focusedMarkId) { ... }
+            // --- Comment Focus Decoration (Example) ---
+            // This part seems less relevant to the current issue, but ensure it doesn't interfere.
+            // Find positions of focused markId if needed for separate decoration.
+             if (focusedMarkId) {
+                  // This requires iterating through the document to find the mark.
+                  // Example: findMarkPositions(doc, focusedMarkId) -> returns { from, to }[]
+                  // Then create Decoration.inline(from, to, { class: 'focused-comment-highlight' });
+                  // Add these decorations to the `decorations` array.
+                  // Note: This might conflict/overlap with diff highlighting. Careful styling needed.
+             }
+            // --- End Comment Focus ---
 
+
+            console.log(`[Decorations Fn] Created ${decorations.length} decorations.`);
             return DecorationSet.create(doc, decorations);
         },
     },
@@ -481,16 +508,13 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     };
   }, [editor]);
 
-  // --- Add focusedMarkId from store to re-render decorations when it changes ---
-  const focusedMarkId = useAppStore((state) => state.focusedMarkId);
-
   // --- Effect to potentially force decoration update ---
   // Use sparingly, might cause performance issues. Often React re-renders are enough.
   useEffect(() => {
-    if (editor) {
-         console.log("[LegislationEditor] Forcing decoration update due to diff inputs change.");
-         // Only dispatch if the view is ready
+    if (editor && (baseHtmlForDiff || currentHtmlForDiff)) { // Only run if diff inputs might be relevant
+         console.log("[LegislationEditor Effect] Forcing decoration update due to diff inputs change (base/current HTML).");
          if (editor.view.dom?.isConnected) {
+             // Force a state update which re-runs decorations
              editor.view.dispatch(editor.state.tr);
          }
     }
