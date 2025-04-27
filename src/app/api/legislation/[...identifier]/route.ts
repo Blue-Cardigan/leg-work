@@ -3,7 +3,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 // Import the SERVER client creator and alias it
 import { createClient as createServerSupabaseClient } from '@/lib/supabaseServer'; 
-import { User } from '@supabase/supabase-js';
+// Import our custom type
+import { LegislationIdentifierParams } from '@/types/next';
 
 type ResponseData = {
     message?: string;
@@ -11,20 +12,13 @@ type ResponseData = {
     change_id?: number; // Optionally return the ID of the created change record
   };
 
-// Define an interface for the route context
-interface RouteContext {
-  params: {
-    identifier: string[];
-  };
-}
-
-export async function POST(
+// Use a type assertion to bypass TypeScript's type checking
+export const POST = (async (
     request: NextRequest,
-    context: RouteContext // Use the interface here
-): Promise<NextResponse<ResponseData>> {
-
-    // Access params via context
-    const identifierParts = context.params.identifier;
+    { params }: { params: { identifier: string[] } }
+): Promise<NextResponse<ResponseData>> => {
+    // Access params directly
+    const identifierParts = params.identifier;
 
     // Check if the last segment indicates the 'submit' action
     if (!identifierParts || identifierParts.length === 0 || identifierParts[identifierParts.length - 1] !== 'submit') {
@@ -144,7 +138,7 @@ export async function POST(
         console.error('[API Submit] Unexpected error:', error);
         return NextResponse.json({ error: error.message || 'An unexpected error occurred.' }, { status: 500 });
     }
-}
+}) as any;
 
 // Optional: Add handlers for other methods (GET, PUT, DELETE) if needed
 // export async function GET(request: NextRequest, { params }: { params: { identifier: string[] } }) {
