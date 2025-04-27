@@ -4,13 +4,30 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore, LegislationContent, Comment, useFocusedMarkId, useActiveCommentInputMarkId, useCommentActions } from '@/lib/store/useAppStore'; // Adjust path if needed
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
+import DiffViewer from './ui/DiffViewer'; // Import the DiffViewer component
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown, Send, Trash2, Lock } from "lucide-react"; // Added Send, Trash2, Lock
+import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown, Send, Trash2, Lock, MessageSquare, Info } from "lucide-react"; // Added Send, Trash2, Lock, MessageSquare, Info
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
 import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
 import { Button } from "@/components/ui/button"; // Import Button for collapse toggle
 import { Editor } from '@tiptap/core';
 import { User } from '@supabase/supabase-js'; // Import Supabase User type
+
+// Define ProposedChange interface locally
+interface ProposedChange {
+    id: number;
+    created_at: string;
+    user_id: string;
+    legislation_id: string;
+    legislation_title: string;
+    section_key: string;
+    section_title: string;
+    original_html: string | null;
+    proposed_html: string | null;
+    status: string;
+    context_before: string | null;
+    context_after: string | null;
+}
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -25,23 +42,6 @@ const generateSafeId = (input: string): string => {
 // --- NEW: Props for MainContent --- 
 type MainContentProps = object; // <-- Use type object instead
 // --- END NEW ---
-
-// --- ProposedChange Type (Mirrored from Dashboard) ---
-interface ProposedChange {
-    id: number;
-    created_at: string;
-    user_id: string;
-    legislation_id: string;
-    legislation_title: string;
-    section_key: string; // This might be 'fullDocument' for our current setup
-    section_title: string; // Might be the legislation title
-    original_html: string | null; // Original HTML of the *entire* document at time of change? Needs clarification.
-    proposed_html: string | null; // Proposed HTML for the *entire* document
-    status: string;
-    context_before: string | null; // Less relevant for full document changes?
-    context_after: string | null; // Less relevant for full document changes?
-}
-// --- END ProposedChange Type ---
 
 // --- NEW: Simple Skeleton Loader Component ---
 const SkeletonLoader: React.FC<{ message?: string }> = ({ message = "Loading content..." }) => (
@@ -186,7 +186,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
 
   // --- Handler to receive editor instance ---
   const handleEditorReady = useCallback((editor: Editor) => {
-     console.log("[MainContent] Editor instance received", !!editor); // Log if editor is received
+     console.log("[MainContent] Editor instance ready.");
      setEditorInstance(editor);
   }, []);
 
@@ -217,13 +217,15 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
 
 
   // Function triggered by the toolbar's "Add Comment" button
-  const handleToolbarAddCommentClick = (markId: string) => {
-    console.log(`[MainContent] Add comment triggered for markId: ${markId}. Activating input in RightSidebar.`);
-    setActiveCommentInputMarkId(markId); // Use store action to set the active mark ID
-    // RightSidebar will react to activeCommentInputMarkId and show input
-    // Optional: Scroll the new mark into view immediately? 
-    setTimeout(() => handleScrollToMark(markId), 100); 
-  };
+  const handleToolbarAddCommentClick = useCallback((markId: string) => {
+    if (!editorInstance) {
+        console.error("Cannot add comment: Editor instance not available.");
+        return;
+    }
+     console.log(`[MainContent] handleToolbarAddCommentClick called with markId: ${markId}`);
+     // Set the active input mark ID using the action from the store
+     setActiveCommentInputMarkId(markId); // Use the action here
+  }, [editorInstance, setActiveCommentInputMarkId]);
 
   // --- NEW: Extract Explanatory Note ---
   useEffect(() => {
@@ -712,27 +714,33 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
             ref={mainContentRef}
             className={`flex-grow overflow-y-auto p-6 ${viewMode === 'edit' ? 'pt-2' : 'pt-4'} scroll-smooth`}
         >
-            {/* Single Editor for the whole document */}
+            {/* Single Editor or Diff Viewer */}
             <div className="flex-grow">
               {isEditorReadyForDisplay ? (
-                  <LegislationEditor
-                      // Use the derived content variable
-                      content={editorContentToShow}
-                      editable={viewMode === 'edit' && !!currentUser} // Editor editable only if in edit mode AND logged in
-                      onChange={(viewMode === 'edit' && !!currentUser) ? setLocalEditorContent : undefined} // Only allow changes if logged in
-                      onAddCommentClick={(viewMode === 'edit' && !!currentUser) ? handleToolbarAddCommentClick : undefined} // Only allow comments if logged in
-                      onEditorReady={handleEditorReady}
-                      showToolbar={false} // Toolbar is handled above
-                      // Pass diff props only when ready
-                      baseHtmlForDiff={baseHtmlForEditor}
-                      currentHtmlForDiff={currentHtmlForEditor}
-                      // --- Pass the full changes list ---
-                      allPendingChanges={changesForEditor}
-                  />
+                  <> {/* Use Fragment to conditionally render one child */} 
+                    {viewMode === 'changes' ? (
+                       <DiffViewer
+                            oldString={baseHtmlForEditor}
+                            newString={currentHtmlForEditor}
+                        />
+                    ) : (
+                        <LegislationEditor
+                            // Use the derived content variable
+                            content={editorContentToShow}
+                            editable={viewMode === 'edit' && !!currentUser} // Editor editable only if in edit mode AND logged in
+                            onChange={(viewMode === 'edit' && !!currentUser) ? setLocalEditorContent : undefined} // Only allow changes if logged in
+                            onAddCommentClick={(viewMode === 'edit' && !!currentUser) ? handleToolbarAddCommentClick : undefined} // Only allow comments if logged in
+                            onEditorReady={handleEditorReady}
+                            showToolbar={false} // Toolbar is handled above
+                            // --- Pass the full changes list (kept for potential future use, though not directly used by editor now) ---
+                            allPendingChanges={changesForEditor}
+                        />
+                    )}
+                  </>
               ) : (
                   // This case should ideally be caught by the top-level isLoading check,
                   // but acts as a fallback if something unexpected happens.
-                  <SkeletonLoader message="Preparing editor..." />
+                  <SkeletonLoader message="Preparing view..." />
               )}
             </div>
         </div>

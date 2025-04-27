@@ -17,6 +17,7 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ oldString, newString }) => {
   const diffStyles = `
     .htmldiff {
       overflow-x: auto; /* Handle potential overflow */
+      height: 100%; /* Ensure inner div takes full height */
     }
     .htmldiff ins {
       background-color: rgba(0, 255, 0, 0.2);
@@ -29,7 +30,7 @@ const DiffViewer: React.FC<DiffViewerProps> = ({ oldString, newString }) => {
   `;
 
   return (
-    <div className="text-sm p-2 border rounded bg-gray-50 dark:bg-gray-800 max-h-48 overflow-y-auto whitespace-normal break-words">
+    <div className="text-sm p-2 border rounded bg-gray-50 dark:bg-gray-800 overflow-y-auto whitespace-normal break-words h-full">
       {/* Inject the styles */}
       <style>{diffStyles}</style>
       {/* Render the diff HTML using dangerouslySetInnerHTML */}
