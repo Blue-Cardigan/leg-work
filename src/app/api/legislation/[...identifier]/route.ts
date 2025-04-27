@@ -11,13 +11,20 @@ type ResponseData = {
     change_id?: number; // Optionally return the ID of the created change record
   };
 
+// Define an interface for the route context
+interface RouteContext {
+  params: {
+    identifier: string[];
+  };
+}
+
 export async function POST(
     request: NextRequest,
-    { params }: { params: { identifier: string[] } }
+    context: RouteContext // Use the interface here
 ): Promise<NextResponse<ResponseData>> {
 
-    const resolvedParams = await params; // Await params here
-    const identifierParts = resolvedParams.identifier; // Access identifier from the resolved params
+    // Access params via context
+    const identifierParts = context.params.identifier;
 
     // Check if the last segment indicates the 'submit' action
     if (!identifierParts || identifierParts.length === 0 || identifierParts[identifierParts.length - 1] !== 'submit') {

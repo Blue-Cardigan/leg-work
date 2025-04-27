@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { createClient } from '@/lib/supabaseClient'; // Use the client factory
 import Link from 'next/link';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -44,89 +44,96 @@ export default function DashboardPage() {
     const [error, setError] = useState<string | null>(null);
     const [user, setUser] = useState<User | null>(null); // Use specific User type
 
-    useEffect(() => {
-        console.log('[DashboardPage] useEffect running. Supabase client defined:', !!supabase);
+    // --- Helper: Fetch Changes (Defined BEFORE useEffect hooks) ---
+    // useCallback ensures fetchChanges has a stable identity unless its own dependencies change
+    const fetchChanges = useCallback(async (currentUser: User) => {
+        // Only proceed if not already loading to prevent potential race conditions
+        // Although the logic separation might make this less critical, it's still safer.
+        // Note: We are reading isLoading here, but fetchChanges itself won't be *called* based on isLoading changing.
+        setIsLoading(true);
+        setError(null);
+        // Don't clear proposedChanges here, prevents UI flashing during refresh
+        // setProposedChanges([]);
+        try {
+            console.log(`[fetchChanges] Fetching proposed changes for user: ${currentUser.id}`);
+            const { data, error: changesError } = await supabase
+                .from('proposed_changes')
+                .select('*')
+                .eq('user_id', currentUser.id)
+                .order('created_at', { ascending: false });
 
-        // Function to fetch changes
-        const fetchChanges = async (currentUser: User) => {
-            setIsLoading(true);
-            setError(null);
-            setProposedChanges([]); // Clear previous changes
-            try {
-                console.log(`[DashboardPage] Fetching proposed changes for user: ${currentUser.id}`);
-                console.log('[DashboardPage] Preparing to call supabase.from...'); // <-- Added log
-                const { data, error: changesError } = await supabase
-                    .from('proposed_changes')
-                    .select('*')
-                    .eq('user_id', currentUser.id)
-                    .order('created_at', { ascending: false });
-                
-                console.log('[DashboardPage] Supabase call returned.'); // <-- Added log
-
-                if (changesError) {
-                    console.error("[DashboardPage] Supabase query error object:", changesError); // <-- Log the specific error object
-                    throw changesError;
-                }
-
-                console.log(`[DashboardPage] Fetched ${data?.length ?? 0} changes.`);
-                setProposedChanges(data || []);
-            } catch (err: any) {
-                console.error("[DashboardPage] Error caught fetching proposed changes:", err);
-                setError(err.message || "Failed to load your proposed changes.");
-                setProposedChanges([]); // Ensure changes are cleared on error
-            } finally {
-                console.log("[DashboardPage] Fetch finished, setting loading to false.");
-                setIsLoading(false);
+            if (changesError) {
+                console.error("[fetchChanges] Supabase query error:", changesError);
+                throw changesError;
             }
-        };
 
-        // Check initial auth state synchronously IF POSSIBLE (might still need listener)
-        // This helps avoid flashing the "Loading..." state if user is already known
-        supabase.auth.getUser().then(({ data: { user: initialUser } }: { data: { user: User | null } }) => {
+            console.log(`[fetchChanges] Fetched ${data?.length ?? 0} changes.`);
+            setProposedChanges(data || []); // Update with fetched data
+        } catch (err: any) {
+            console.error("[fetchChanges] Error caught:", err);
+            setError(err.message || "Failed to load your proposed changes.");
+            setProposedChanges([]); // Clear changes on error
+        } finally {
+            console.log("[fetchChanges] Fetch finished, setting loading to false.");
+            setIsLoading(false);
+        }
+    // Dependencies: supabase client, state setters. isLoading removed from here too.
+    }, [supabase, setIsLoading, setError, setProposedChanges]);
+
+    // --- Effect 1: Initial Authentication Check & Fetch ---
+    useEffect(() => {
+        console.log('[DashboardPage] Effect 1: Initial auth check running.');
+        // Check initial auth state when component mounts
+        supabase.auth.getUser().then(({ data: { user: initialUser } }) => {
              console.log("[DashboardPage] Initial auth check completed.", initialUser);
              if (initialUser) {
-                 setUser(initialUser);
-                 fetchChanges(initialUser); // Fetch immediately if user exists
+                 setUser(initialUser); // Set user state
+                 // Don't set loading true here, fetchChanges handles it
+                 fetchChanges(initialUser); // Perform initial fetch
              } else {
-                 setIsLoading(false); // No user, stop loading (will be updated by listener if needed)
+                 setIsLoading(false); // No initial user, stop loading
              }
         });
+    // Dependencies: Only supabase client and the stable fetchChanges callback.
+    // Runs once on mount (or if supabase/fetchChanges identity were to change).
+    }, [supabase, fetchChanges]);
 
-
-        // Combined listener for auth changes
+    // --- Effect 2: Auth State Change Listener ---
+    useEffect(() => {
+        console.log('[DashboardPage] Effect 2: Setting up auth listener.');
+        // Set up listener for subsequent auth changes
         const { data: authListener } = supabase.auth.onAuthStateChange(
             (event: AuthChangeEvent, session: Session | null) => {
-                console.log(`[DashboardPage] Auth event: ${event}`, session);
+                console.log(`[DashboardPage] Auth event received: ${event}`, session);
                 const currentUser = session?.user ?? null;
-                setUser(currentUser); // Update user state
+                setUser(currentUser); // Update user state regardless of event type
 
-                if (currentUser) {
-                    // User is logged in or session restored, fetch their changes
-                    // Avoid fetching if data is already loading from initial check
-                    if (!isLoading) { 
-                         fetchChanges(currentUser);
-                    } else {
-                        console.log("[DashboardPage] Auth event occurred while initial fetch might be loading, deferring to initial fetch.");
-                    }
-                } else {
-                    // User is logged out
-                    console.log("[DashboardPage] User logged out or session expired.");
-                    setError(null); // Clear potential previous errors
+                // Fetch data on sign-in or token refresh
+                if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+                     if (currentUser) {
+                        console.log(`[DashboardPage] Auth event ${event}: Triggering fetchChanges.`);
+                        // Don't set loading true here, fetchChanges handles it
+                        fetchChanges(currentUser);
+                     }
+                } else if (event === 'SIGNED_OUT') {
+                    // Clear data on sign-out
+                    console.log("[DashboardPage] Auth event SIGNED_OUT: Clearing state.");
+                    setError(null);
                     setProposedChanges([]);
-                    setIsLoading(false); // Not loading if logged out
+                    setIsLoading(false); // Ensure loading is false on sign out
                 }
+                // Other events like USER_UPDATED could be handled here if needed
             }
         );
 
         // Cleanup listener on component unmount
         return () => {
-            console.log("[DashboardPage] Cleaning up useEffect, unsubscribing auth listener.");
+            console.log("[DashboardPage] Cleaning up auth listener.");
             authListener?.subscription.unsubscribe();
         };
-        // We only want this effect to run once on mount to set up the listener.
-        // Supabase client instance is stable due to useState initializer.
-    }, [supabase]); // Dependency array ensures effect runs if supabase instance were to change (it won't here)
-
+    // Dependencies: Only supabase client and the stable fetchChanges callback.
+    // Runs once on mount (or if supabase/fetchChanges identity were to change).
+    }, [supabase, fetchChanges]);
 
     const getStatusColor = (status: string) => {
         switch (status.toLowerCase()) {
