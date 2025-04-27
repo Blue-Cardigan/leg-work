@@ -558,27 +558,6 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
   }, [editor, insertionRanges, focusedMarkId]); // Update props when editor instance or calculated ranges change
   // --- END Effect ---
 
-
-  // --- NEW: Effect to update editor content when currentHtmlForDiff prop changes ---
-  useEffect(() => {
-    if (!editor || currentHtmlForDiff === null) { // Check for null specifically
-      return; // Editor not ready or no current HTML
-    }
-
-    const editorHtml = editor.getHTML();
-
-    // Only update if the prop is different from the editor's current content
-    if (currentHtmlForDiff !== editorHtml) {
-      console.log("[LegislationEditor Effect] Updating editor content from currentHtmlForDiff prop.");
-      // Use `setContent` to update the editor state.
-      // `emitUpdate: false` prevents the `onUpdate` callback from firing unnecessarily,
-      // as this change originates from a prop, not a user edit.
-      // It also prevents triggering the onUpdate -> onChange -> setFullDocumentHtml loop here.
-      editor.commands.setContent(currentHtmlForDiff || '', false);
-    }
-  }, [currentHtmlForDiff, editor]); // Depend on prop and editor instance
-  // --- END NEW EFFECT ---
-
   // Ensure editor is destroyed on unmount
   React.useEffect(() => {
     return () => {
