@@ -243,7 +243,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       }
     }
     // Depend only on fullDocumentHtml; viewMode and localEditorContent are checked inside.
-  }, [fullDocumentHtml]); 
+  }, [fullDocumentHtml, localEditorContent, viewMode]); 
   // --- END NEW ---
 
   // --- Fetch ALL Pending Changes and Determine Base HTML ---
@@ -326,7 +326,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
         setIsDiffDataReady(false);
         setFinalProposedHtml(null);
     }
-  }, [selectedLegislation, viewMode, supabase, initialFullDocumentHtml, isGlobalLoadingContent]); // Added dependencies
+  }, [selectedLegislation, viewMode, supabase, initialFullDocumentHtml, isGlobalLoadingContent, fullDocumentHtml]); // Added dependencies
   // --- END Fetch ---
 
   // --- Derived Loading State ---
