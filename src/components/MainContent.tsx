@@ -5,11 +5,12 @@ import { useAppStore, LegislationContent, Comment, useFocusedMarkId, useActiveCo
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown, Send, Trash2 } from "lucide-react"; // Added Send, Trash2
+import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown, Send, Trash2, Lock } from "lucide-react"; // Added Send, Trash2, Lock
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
 import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
 import { Button } from "@/components/ui/button"; // Import Button for collapse toggle
 import { Editor } from '@tiptap/core';
+import { User } from '@supabase/supabase-js'; // Import Supabase User type
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -101,6 +102,51 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   const [explanatoryNoteHtml, setExplanatoryNoteHtml] = useState<string | null>(null);
   const [isExplanatoryNoteVisible, setIsExplanatoryNoteVisible] = useState<boolean>(true);
   const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false);
+
+  // --- NEW: Authentication State ---
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(true);
+  const [showLoginAlert, setShowLoginAlert] = useState<boolean>(false);
+  // --- END NEW ---
+
+  // --- NEW: Effect to Check Authentication Status ---
+  useEffect(() => {
+    const checkAuth = async () => {
+        setAuthLoading(true);
+        try {
+            const { data: { session }, error } = await supabase.auth.getSession();
+            if (error) {
+                console.error("Error fetching session:", error);
+                setCurrentUser(null);
+            } else {
+                setCurrentUser(session?.user ?? null);
+                console.log("[MainContent Auth] Session fetched, user:", session?.user?.email ?? "none");
+            }
+        } catch (err) {
+            console.error("Unexpected error during auth check:", err);
+            setCurrentUser(null);
+        } finally {
+            setAuthLoading(false);
+        }
+    };
+    checkAuth();
+
+    // Also listen for auth state changes (login/logout)
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+        console.log(`[MainContent Auth] Auth state changed: ${event}, User: ${session?.user?.email ?? 'none'}`);
+        setCurrentUser(session?.user ?? null);
+        // Hide login alert if user logs in while it's shown
+        if (event === "SIGNED_IN") {
+            setShowLoginAlert(false);
+        }
+    });
+
+    // Cleanup listener on component unmount
+    return () => {
+      authListener?.subscription?.unsubscribe();
+    };
+  }, [supabase]);
+  // --- END NEW ---
 
   // --- Fetch comments when legislation changes (Keep this) ---
   // This assumes CommentDisplaySidebar is rendered elsewhere based on store state
@@ -330,17 +376,21 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   // --- END Fetch ---
 
   // --- Derived Loading State ---
-  // Overall loading is true if global content is loading OR if we are in diff mode and waiting for changes/baseHTML
-  const isLoading = isGlobalLoadingContent || ((viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges);
-  const isEditorReadyForDisplay = !isGlobalLoadingContent && (viewMode === 'view' || ((viewMode === 'changes' || viewMode === 'edit') && isDiffDataReady));
+  // Overall loading is true if global content is loading OR if we are in diff mode and waiting for changes/baseHTML OR auth is loading
+  const isLoading = authLoading || isGlobalLoadingContent || ((viewMode === 'changes' || viewMode === 'edit') && isLoadingChanges);
+  const isEditorReadyForDisplay = !authLoading && !isGlobalLoadingContent && (viewMode === 'view' || ((viewMode === 'changes' || viewMode === 'edit') && isDiffDataReady));
 
   // --- Loading State ---
   if (isLoading) {
     // Customize message based on what's loading
-    let loadingMessage = "Loading content...";
-    if (!isGlobalLoadingContent && isLoadingChanges) {
+    let loadingMessage = "Loading...";
+    if (authLoading) {
+        loadingMessage = "Checking authentication...";
+    } else if (isGlobalLoadingContent) {
+        loadingMessage = "Loading content...";
+    } else if (isLoadingChanges) {
         loadingMessage = "Loading pending changes...";
-    } else if (!isGlobalLoadingContent && (viewMode === 'changes' || viewMode === 'edit') && !isDiffDataReady) {
+    } else if ((viewMode === 'changes' || viewMode === 'edit') && !isDiffDataReady) {
         loadingMessage = "Preparing diff view..."; // Catch state where changes loaded but diff isn't ready yet
     }
     return <SkeletonLoader message={loadingMessage} />;
@@ -356,7 +406,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   if (fullDocumentHtml === null && viewMode !== 'edit') {
       console.log('[MainContent] Error: fullDocumentHtml is null after loading attempt (not in edit mode). Displaying loader.');
       // TODO: Display a more specific error message if available from the store
-      return <SkeletonLoader message="Failed to load legislation content. Please try selecting it again." />;
+      return <SkeletonLoader message="Running 🦵🦵" />;
   }
   // If entering edit mode but initialization failed (global was null)
   if (viewMode === 'edit' && localEditorContent === null) {
@@ -368,9 +418,21 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       );
   }
 
-  // --- Handler for Mode Change ---
+  // --- Handler for Mode Change (Updated for Auth Check) ---
   const handleModeChange = (newMode: ViewMode | null) => {
-      if (!newMode || newMode === viewMode) return;
+      if (!newMode || newMode === viewMode || authLoading) return; // Don't change mode if auth state is loading
+
+      // --- NEW: Auth check before entering edit mode ---
+      if (newMode === 'edit' && !currentUser) {
+          console.log("[MainContent] User not logged in. Preventing switch to edit mode.");
+          setShowLoginAlert(true); // Show the login prompt
+          // Do NOT change the viewMode, keep the current one
+          return;
+      } else {
+          // Hide alert if switching to a mode other than edit, or if user is logged in
+          setShowLoginAlert(false);
+      }
+      // --- END NEW ---
 
       console.log(`[MainContent] Switching mode from ${viewMode} to ${newMode}`);
 
@@ -458,6 +520,31 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   };
   // --- END NEW ---
 
+  // --- NEW: Login Alert ---
+  if (showLoginAlert) {
+    return (
+        <Alert
+            variant="default" // Use default variant, styling handled by classes
+            className="mb-3 border-yellow-500 text-yellow-700 dark:text-yellow-400 dark:border-yellow-600 bg-yellow-50 dark:bg-yellow-900/50 relative" // Added background and relative positioning
+        >
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Login Required</AlertTitle>
+            <AlertDescription>
+                You must be logged in to make edits. Please <a href="/login" className="font-medium underline hover:text-yellow-800 dark:hover:text-yellow-300">log in</a> or <a href="/signup" className="font-medium underline hover:text-yellow-800 dark:hover:text-yellow-300">sign up</a>.
+            </AlertDescription>
+             {/* Optional: Add close button */}
+             <button
+                onClick={() => setShowLoginAlert(false)}
+                className="absolute top-2 right-2 text-yellow-600 hover:text-yellow-800 dark:text-yellow-400 dark:hover:text-yellow-200"
+                aria-label="Close login prompt"
+            >
+                <X className="h-4 w-4" />
+            </button>
+        </Alert>
+    );
+  }
+  // --- END NEW ---
+
   // --- Main Render ---
   return (
     // Outer container - NOT scrollable, controls overall flex layout
@@ -474,15 +561,30 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
 
             {/* --- View Mode Toggle & Collapse Button --- */}
             <div className="mb-3 flex justify-between items-center">
-                 <ToggleGroup type="single" value={viewMode} onValueChange={(value) => { handleModeChange(value as ViewMode) }} size="sm">
+                 <ToggleGroup
+                     type="single"
+                     value={viewMode}
+                     // Update onValueChange to handle potential blocking by handleModeChange
+                     onValueChange={(value) => {
+                         // If the value is empty (toggle deselected) or same as current, do nothing
+                         if (!value || value === viewMode) return;
+                         handleModeChange(value as ViewMode);
+                     }}
+                     size="sm"
+                 >
                     <ToggleGroupItem value="view" aria-label="View mode">
                         <Eye className="h-4 w-4 mr-1" /> View
                     </ToggleGroupItem>
                     <ToggleGroupItem value="changes" aria-label="View changes mode">
                         <GitCompareArrows className="h-4 w-4 mr-1" /> Changes
                     </ToggleGroupItem>
-                    <ToggleGroupItem value="edit" aria-label="Edit mode">
-                         <Pencil className="h-4 w-4 mr-1" /> Edit
+                    <ToggleGroupItem
+                        value="edit"
+                        aria-label="Edit mode"
+                        disabled={authLoading || !currentUser} // Disable if loading auth or not logged in
+                        title={!currentUser ? "Log in to edit" : "Edit mode"} // Add tooltip
+                    >
+                         {currentUser ? <Pencil className="h-4 w-4 mr-1" /> : <Lock className="h-4 w-4 mr-1 text-gray-400" />} Edit
                     </ToggleGroupItem>
                 </ToggleGroup>
                  {/* --- NEW: Submit/Discard Buttons (only in Edit mode) --- */}
@@ -595,7 +697,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
         {/* --- Sticky Toolbar Area (Non-Scrolling) --- */}
         {/* Only show toolbar in Edit mode - Remains visible even if header above is collapsed */}
         {/* Its stickiness should now correctly attach to the top of the parent when header is collapsed */}
-        {viewMode === 'edit' && (
+        {viewMode === 'edit' && currentUser && ( // Also check currentUser here
             <div className="sticky top-0 z-10 bg-white dark:bg-gray-900 py-1 px-6 border-b border-gray-200 dark:border-gray-700 flex-shrink-0">
                 {editorInstance ? (
                     <LegislationToolbar
@@ -620,9 +722,9 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                   <LegislationEditor
                       // Use the derived content variable
                       content={editorContentToShow}
-                      editable={viewMode === 'edit'}
-                      onChange={viewMode === 'edit' ? setLocalEditorContent : undefined}
-                      onAddCommentClick={viewMode === 'edit' ? handleToolbarAddCommentClick : undefined}
+                      editable={viewMode === 'edit' && !!currentUser} // Editor editable only if in edit mode AND logged in
+                      onChange={viewMode === 'edit' && currentUser ? setLocalEditorContent : undefined} // Only allow changes if logged in
+                      onAddCommentClick={viewMode === 'edit' && currentUser ? handleToolbarAddCommentClick : undefined} // Only allow comments if logged in
                       onEditorReady={handleEditorReady}
                       showToolbar={false} // Toolbar is handled above
                       // Pass diff props only when ready
