@@ -221,7 +221,7 @@ export default function DashboardPage() {
             <h1 className="text-3xl font-bold mb-6 text-gray-900 dark:text-gray-100">Your Proposed Changes</h1>
 
              {proposedChanges.length === 0 ? (
-                <p className="text-gray-600 dark:text-gray-400">You haven't proposed any changes yet.</p>
+                <p className="text-gray-600 dark:text-gray-400">You haven&apos;t proposed any changes yet.</p>
             ) : (
                 <Accordion type="multiple" className="w-full space-y-4">
                     {Object.entries(groupedChanges).map(([legislationTitle, sections]) => (

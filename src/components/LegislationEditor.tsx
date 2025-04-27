@@ -171,7 +171,7 @@ const CommentMarkNodeView: React.FC<NodeViewProps> = ({ node, HTMLAttributes, ed
 };
 
 // --- Custom Mark for Comments ---
-interface CommentMarkOptions {}
+type CommentMarkOptions = object;
 
 declare module '@tiptap/core' {
   interface Commands<ReturnType> {
@@ -295,7 +295,7 @@ const convertHtmlToPlainText = (html: string | null): string => {
 // THIS IS A COMPLEX PROBLEM and this implementation is basic.
 // It might not handle nested nodes, marks, or complex structures accurately.
 const mapCharIndexToPos = (doc: ProseMirrorNode, charIndex: number, assoc: -1 | 1 = 1): number | null => {
-    let currentPos = 0;
+    const currentPos = 0; // <-- Changed to const
     let currentCharCount = 0;
     let resultPos: number | null = null;
 

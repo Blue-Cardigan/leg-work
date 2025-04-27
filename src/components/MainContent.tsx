@@ -22,9 +22,7 @@ const generateSafeId = (input: string): string => {
 };
 
 // --- NEW: Props for MainContent --- 
-interface MainContentProps {
-  // onSectionVisible: (id: string) => void; // Likely no longer needed
-}
+type MainContentProps = object; // <-- Use type object instead
 // --- END NEW ---
 
 // --- ProposedChange Type (Mirrored from Dashboard) ---
@@ -226,7 +224,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       // (e.g., switching legislation resets everything)
       // However, if global HTML changes *while* in edit mode (e.g., due to external update/reset),
       // we might need a strategy (prompt user? discard local changes?). For now, let's keep local changes.
-  }, [viewMode, fullDocumentHtml]); // Rerun when mode or global HTML changes
+  }, [viewMode, fullDocumentHtml, localEditorContent]); // Rerun when mode or global HTML changes - Added localEditorContent
+  // --- END NEW ---
 
   // --- Fetch ALL Pending Changes ---
   useEffect(() => {

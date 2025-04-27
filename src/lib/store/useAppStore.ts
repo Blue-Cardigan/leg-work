@@ -897,7 +897,7 @@ export const useFilteredLegislationList = () => {
     if (!allLegislationList) return [];
     
     // Apply basic filtering (type and search term)
-    let list = allLegislationList.filter(item => {
+    const list = allLegislationList.filter(item => {
       const typeMatch = selectedTypes.includes(item.type);
       if (!typeMatch) return false;
 

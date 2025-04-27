@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     console.log(`[API /comments GET] Fetching comments for legislation_id: ${legislationId}`);
     
     // Base query
-    let query = supabase
+    const query = supabase
       .from('comments')
       .select('id, created_at, user_id, user_email, comment_text, mark_id, resolved_at, section_key') // Select desired fields
       .eq('legislation_id', legislationId)
