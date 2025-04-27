@@ -225,7 +225,7 @@ export default function RightSidebar() {
                   <div className="text-center py-4 text-gray-500 dark:text-gray-400">No comments yet. Select text in the editor and click the comment icon in the toolbar to add one.</div>
               )}
               {!isLoadingComments && comments.length > 0 && (
-                  comments
+                  [...comments] // <-- Create a shallow copy here
                     .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) // Sort newest first
                     .map((comment) => (
                       <CommentCard 

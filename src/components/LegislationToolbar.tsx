@@ -199,7 +199,6 @@ const LegislationToolbar: React.FC<LegislationToolbarProps> = ({ editor, onAddCo
       <ToolbarButton
         onClick={handleAddComment}
         isActive={editor.isActive('commentMark')}
-        disabled={editor.state.selection.empty || !editor.can().setCommentMark('')}
         title="Add Comment"
       >
         <IconCommentAdd size={18} />
