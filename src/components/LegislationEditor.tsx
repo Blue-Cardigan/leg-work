@@ -6,14 +6,12 @@ import StarterKit from '@tiptap/starter-kit';
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import Link from '@tiptap/extension-link'; // Import Link extension
 import { Decoration, DecorationSet } from 'prosemirror-view'; // Import ProseMirror decorations
-import { Node as ProseMirrorNode } from 'prosemirror-model'; // Import Node type
-import { DOMParser } from 'prosemirror-model'; // Import DOMParser
 
 // --- Import extensions to customize --- 
 import Paragraph from '@tiptap/extension-paragraph';
 import Heading from '@tiptap/extension-heading';
 import { Mark, Command } from '@tiptap/core'; // Import more types and Command
-import { useAppStore } from '@/lib/store/useAppStore'; // Import store for actions
+import { useAppStore, useFocusedMarkId } from '@/lib/store/useAppStore'; // Import store for actions
 import { Editor } from '@tiptap/react'; // Ensure Editor type is imported
 // --- End imports ---
 
@@ -284,7 +282,10 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     showToolbar = true, // Default to true if not provided
     allPendingChanges   // <-- Destructure new prop
 }) => { // Default editable to true
-  const focusedMarkId = useAppStore((state) => state.focusedMarkId); // Get focused ID
+  const focusedMarkId = useFocusedMarkId(); // Get focused ID from store hook
+  const setFocusedMarkId = useAppStore((state) => state.setFocusedMarkId); // Get action
+  // --- MODIFIED: Get fullDocumentHtml from store ---
+  const fullDocumentHtmlFromStore = useAppStore((state) => state.fullDocumentHtml);
 
   const editor = useEditor({
     extensions: [
@@ -332,6 +333,25 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
     // Add this line to fix SSR hydration issue
     immediatelyRender: false,
   });
+
+  // --- NEW: Effect to Sync Editor with Store's fullDocumentHtml ---
+  useEffect(() => {
+    if (!editor || !editor.isEditable || !fullDocumentHtmlFromStore) {
+        // Only sync if editor exists, is editable (to avoid overwriting view/changes mode), and store HTML is present
+        return;
+    }
+
+    const editorHtml = editor.getHTML();
+
+    // Only update editor if store HTML is different from editor's current HTML
+    // This prevents infinite loops caused by the onUpdate callback
+    if (fullDocumentHtmlFromStore !== editorHtml) {
+        console.log("[Editor Sync Effect] Store HTML differs from editor HTML. Updating editor content.");
+        // Use 'false' as the second argument to prevent triggering the 'onUpdate' callback again
+        editor.commands.setContent(fullDocumentHtmlFromStore, false);
+    }
+  }, [editor, fullDocumentHtmlFromStore, editable]); // Depend on store HTML and editable status
+  // --- END NEW Effect ---
 
   // --- Effect for Comment Focus Decoration ---
   useEffect(() => {
@@ -383,14 +403,15 @@ const LegislationEditor: React.FC<LegislationEditorProps> = ({
   }
 
   return (
-    <div className="relative">
-      {editor && showToolbar && editable && ( // Only show toolbar if editable
+    <div className="relative legislation-editor-container">
+      {editor && showToolbar && editable && (
         <LegislationToolbar
           editor={editor}
           onAddCommentClick={onAddCommentClick || (() => console.warn("onAddCommentClick not provided to LegislationEditor"))}
         />
       )}
-      <EditorContent editor={editor} />
+      {/* Added key to potentially help React differentiate editor instances if props change drastically, though unlikely needed with the effect */}
+      <EditorContent editor={editor} key={content ? 'editor-loaded' : 'editor-loading'} className="prose dark:prose-invert max-w-none p-4 focus:outline-none" />
     </div>
   );
 };
