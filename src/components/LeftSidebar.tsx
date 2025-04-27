@@ -8,6 +8,10 @@ import {
   // Import the selector hook
   useFilteredLegislationList, 
   useIsSidebarCollapsed,
+  // --- NEW: Import actions/state for right sidebar ---
+  useRightSidebarContent,
+  useIsRightSidebarOpen, // Import the new selector
+  // --- END NEW ---
 } from '@/lib/store/useAppStore'; 
 // Import Auth components and types
 import UserAuth from './UserAuth';
@@ -15,7 +19,7 @@ import UserAuth from './UserAuth';
 import { createClient } from '@/lib/supabaseClient'; 
 // Correct import for User type and other auth types
 import type { User, AuthChangeEvent, Session } from '@supabase/supabase-js'; 
-import { Info, Filter, PanelLeftClose, PanelRightClose, ListTree, MessageSquare, Trash2, Send, Loader2 } from 'lucide-react'; // Icon for the prompt and Filter button, and new icons for toggle and ListTree
+import { Info, Filter, PanelLeftClose, PanelRightClose, ListTree, MessageSquare, Trash2, Send, Loader2, MessageCircle, PanelLeftOpen, PanelRightOpen, X } from 'lucide-react'; // Icon for the prompt and Filter button, and new icons for toggle and ListTree
 import { Button } from '@/components/ui/button'; // Import Button
 import {
   DropdownMenu,
@@ -137,7 +141,13 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
   const isCommentSidebarOpen = useAppStore((state) => state.isCommentSidebarOpen);
   const toggleCommentSidebar = useAppStore((state) => state.toggleCommentSidebar);
   const comments = useAppStore((state) => state.comments);
-  // -------------------------------------------------
+
+  // --- NEW: Get right sidebar state and action --- 
+  const rightSidebarContent = useRightSidebarContent();
+  const setRightSidebarContent = useAppStore((state) => state.setRightSidebarContent); 
+  const isRightSidebarOpen = useIsRightSidebarOpen(); // Get the state
+  const toggleRightSidebar = useAppStore((state) => state.toggleRightSidebar); // Get the action
+  // --- END NEW ---
 
   const handleDiscard = () => {
     if (confirm("Are you sure you want to discard your changes? This cannot be undone.")) {
@@ -146,6 +156,32 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
         // Optionally show a temporary success message here or rely on store's submitStatus
     }
   };
+
+  // --- NEW: Handler for combined right sidebar toggle --- 
+  const handleRightSidebarToggle = (contentType?: 'chat' | 'comments') => {
+    const currentContent = useAppStore.getState().rightSidebarContent; // Access store directly
+    const isOpen = useAppStore.getState().isRightSidebarOpen;
+
+    if (isOpen) {
+        // If it's open and we click the same button (or the general toggle)
+        if (!contentType || contentType === currentContent) {
+           toggleRightSidebar(); // Close it
+        } else {
+            // If it's open but we click the *other* content type button
+            setRightSidebarContent(contentType); // Switch content, remains open
+        }
+    } else {
+        // If it's closed, open it and set the content
+        if (contentType) {
+            setRightSidebarContent(contentType); // This action now also sets isRightSidebarOpen = true
+        } else {
+             // If using a general toggle button without specifying content,
+             // open it with the *current* content type selected.
+             toggleRightSidebar(); 
+        }
+    }
+  };
+  // --- END NEW ---
 
   return (
     <div className={`flex flex-col h-full bg-gray-100 dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300 ease-in-out ${isSidebarCollapsed ? 'w-16' : 'w-80'}`}>
@@ -174,24 +210,35 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
                  <ListTree className="h-5 w-5" />
                </Button>
              )}
-             {/* --- Collapsed: Comments Toggle --- */}
+             {/* Collapsed Chat Toggle */}
              {selectedLegislation && (
-                <Button
-                  variant={isCommentSidebarOpen ? "secondary" : "ghost"}
-                  size="icon"
-                  onClick={toggleCommentSidebar}
-                  title={isCommentSidebarOpen ? "Hide Comments" : "Show Comments"}
-                  className="relative" // For badge positioning
-                >
-                  <MessageSquare className="h-5 w-5" />
-                  {/* Comment Count Badge - Adjusted for icon button */}
+                 <Button
+                   variant={isRightSidebarOpen && rightSidebarContent === 'chat' ? 'secondary' : 'ghost'} // Highlight if chat panel is open
+                   size="icon"
+                   onClick={() => handleRightSidebarToggle('chat')} // Use specific content toggle
+                   title={isRightSidebarOpen && rightSidebarContent === 'chat' ? "Close Chat Panel" : "Show AI Chat"} // Dynamic title
+                 >
+                   <MessageCircle className="h-5 w-5" /> 
+                 </Button>
+             )}
+             {/* Collapsed Comments Toggle */}
+             {selectedLegislation && (
+                 <Button
+                   variant={isRightSidebarOpen && rightSidebarContent === 'comments' ? 'secondary' : 'ghost'} // Highlight if comments panel is open
+                   size="icon"
+                   onClick={() => handleRightSidebarToggle('comments')} // Use specific content toggle
+                   title={isRightSidebarOpen && rightSidebarContent === 'comments' ? "Close Comments Panel" : "Show Comments"} // Dynamic title
+                   className="relative"
+                 >
+                   <MessageSquare className="h-5 w-5" />
+                   {/* Comment count badge */} 
                    {Array.isArray(comments) && comments.length > 0 && (
-                    <span className="absolute top-0 right-0 block h-4 w-4 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
-                      {comments.length}
-                    </span>
-                  )}
-                </Button>
-              )}
+                     <span className="absolute top-0 right-0 block h-4 w-4 transform translate-x-1/2 -translate-y-1/2 rounded-full bg-red-500 text-white text-xs flex items-center justify-center">
+                       {comments.length}
+                     </span>
+                   )}
+                 </Button>
+             )}
           </div>
         ) : (
           // --- Expanded View: Show Search, Filters, List --- 
@@ -253,18 +300,34 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
             {/* --- Document Action Buttons (Expanded View Only) --- */}
             {selectedLegislation && !isSidebarCollapsed && (
                 <div className="p-2 px-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center space-x-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={toggleCommentSidebar}
-                      title={isCommentSidebarOpen ? "Hide Comments" : "Show Comments"}
-                    >
-                      <MessageSquare className="h-4 w-4 mr-1.5" />
-                      {isCommentSidebarOpen ? "Hide" : "Show"} Comments
-                      {/* Show comment count */}
-                      {Array.isArray(comments) && comments.length > 0 && <span className="ml-1.5 bg-gray-200 dark:bg-gray-600 px-1.5 py-0.5 rounded text-xs">{comments.length}</span>}
-                    </Button>
+                    {/* --- Right Sidebar Toggle Buttons --- */} 
+                    <div className="flex items-center space-x-1">
+                        <Button
+                          variant={isRightSidebarOpen && rightSidebarContent === 'chat' ? 'secondary' : 'ghost'}
+                          size="sm"
+                          onClick={() => handleRightSidebarToggle('chat')}
+                          title={isRightSidebarOpen && rightSidebarContent === 'chat' ? "Close Chat Panel" : "Show AI Chat"}
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant={isRightSidebarOpen && rightSidebarContent === 'comments' ? 'secondary' : 'ghost'}
+                          size="sm"
+                          onClick={() => handleRightSidebarToggle('comments')}
+                          title={isRightSidebarOpen && rightSidebarContent === 'comments' ? "Close Comments Panel" : "Show Comments"}
+                          className="relative"
+                        >
+                          <MessageSquare className="h-4 w-4" />
+                          {Array.isArray(comments) && comments.length > 0 && (
+                             <span className="absolute top-0 right-0 block h-3 w-3 transform translate-x-1 -translate-y-1 rounded-full bg-red-500 text-white text-[8px] flex items-center justify-center">
+                                {comments.length}
+                             </span>
+                          )}
+                        </Button>
+                    </div>
+                    {/* --- END Right Sidebar Toggle Buttons --- */}
 
+                    {/* --- Legislation Change Actions --- */}
                     <div className="flex items-center space-x-2">
                         {hasUnsavedChanges && (
                             <Button variant="outline" onClick={handleDiscard} disabled={isSubmitting} size="sm" title="Discard Changes">
@@ -285,6 +348,7 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
                             )}
                         </Button>
                     </div>
+                    {/* --- END Legislation Change Actions --- */}
                 </div>
             )}
 

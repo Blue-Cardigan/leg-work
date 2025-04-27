@@ -1,17 +1,15 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useAppStore, TocItem, LegislationContent, Comment } from '@/lib/store/useAppStore'; // Adjust path if needed
+import { useAppStore, LegislationContent, Comment, useFocusedMarkId, useActiveCommentInputMarkId, useCommentActions } from '@/lib/store/useAppStore'; // Adjust path if needed
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
 import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown } from "lucide-react"; // Added ChevronUp/Down
-import { useInView } from 'react-intersection-observer'; // Import useInView
-import CommentInputSidebar from './CommentInputSidebar';
-import { Editor } from '@tiptap/core';
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
 import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
 import { Button } from "@/components/ui/button"; // Import Button for collapse toggle
+import { Editor } from '@tiptap/core';
 
 // Helper function to generate safe IDs from titles or hrefs
 const generateSafeId = (input: string): string => {
@@ -21,55 +19,6 @@ const generateSafeId = (input: string): string => {
         .trim()
         .replace(/\s+/g, '-') // Replace spaces with hyphens
         .replace(/-+/g, '-'); // Replace multiple hyphens with single
-};
-
-// Component for rendering each section and handling its visibility
-interface SectionRendererProps {
-  item: TocItem;
-  index: number;
-  sectionHtml: string | null | undefined;
-  onVisible: (id: string) => void; // Callback when section becomes visible
-  updateSectionHtml: (href: string, html: string) => void; // Add this prop
-  onAddCommentTrigger: (markId: string, sectionKey: string) => void; // Add this prop
-}
-
-const SectionRenderer: React.FC<SectionRendererProps> = ({ item, index, sectionHtml, onVisible, updateSectionHtml, onAddCommentTrigger }) => {
-  const sectionId = generateSafeId(item.title || `section-${index}`);
-  const { ref, inView } = useInView({
-      threshold: 0.1, // Trigger when 10% is visible
-      rootMargin: '-10% 0px -50% 0px', // Similar margin to previous attempt
-      // triggerOnce: false // Keep observing
-  });
-
-  useEffect(() => {
-    if (inView) {
-      onVisible(sectionId);
-    }
-  }, [inView, sectionId, onVisible]);
-
-  return (
-    <section
-      ref={ref} // Assign ref from useInView
-      key={`${item.fullHref}-${index}`}
-      id={sectionId}
-      className="legislation-section border-t border-gray-300 dark:border-gray-600 pt-6 scroll-mt-24"
-    >
-      <h2 className="text-xl font-semibold mb-3 text-gray-800 dark:text-gray-200">{item.title}</h2>
-      <div className="prose dark:prose-invert max-w-none">
-        <LegislationEditor
-          content={sectionHtml ?? null} // Default to null if sectionHtml is undefined/null
-          editable={true}
-          onChange={(newHtml) => {
-            // Call the passed update function
-            updateSectionHtml(item.fullHref, newHtml);
-          }}
-          onAddCommentClick={(markId) => onAddCommentTrigger(markId, item.fullHref)}
-          // Pass editor instance up if needed later: onEditorReady={(editor) => setSectionEditor(item.fullHref, editor)}
-        />
-        {!sectionHtml && <p className="text-gray-500 italic">Content loading or not available...</p>}
-      </div>
-    </section>
-  );
 };
 
 // --- NEW: Props for MainContent --- 
@@ -122,20 +71,18 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     setFullDocumentHtml, // Use action for combined HTML
     submitStatus, // Keep for displaying messages
     fetchComments, // Still needed if comments fetched based on legislation ID
-    addComment,
     setFocusedMarkId, // Action to set focus
-    focusedMarkId, // State to react to focus changes
     // Removed state/actions related to buttons moved to LeftSidebar:
     // hasUnsavedChanges, submitChangesForReview, resetContent, isCommentSidebarOpen, comments
   } = useAppStore();
+  const focusedMarkId = useFocusedMarkId(); // Use selector hook
+  const activeCommentInputMarkId = useActiveCommentInputMarkId(); // Use selector hook
+  const { setActiveCommentInputMarkId } = useCommentActions(); // Get specific action
 
   // --- NEW: Local state for editor content during editing ---
   const [localEditorContent, setLocalEditorContent] = useState<string | null>(null);
   // --- END NEW ---
 
-  // State for managing the comment *input* sidebar specifically
-  const [showCommentInputFor, setShowCommentInputFor] = useState<string | null>(null);
-  // const [activeSectionKeyForComment, setActiveSectionKeyForComment] = useState<string | null>(null); // Section key may be less relevant now
   const supabase = createClient(); // Initialize Supabase client
   const mainContentRef = useRef<HTMLDivElement>(null); // Ref for the main scrollable area
   const editorRef = useRef<any>(null); // Ref to potentially access editor instance if needed
@@ -210,58 +157,11 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
 
   // Function triggered by the toolbar's "Add Comment" button
   const handleToolbarAddCommentClick = (markId: string) => {
-    console.log(`[MainContent] Add comment triggered for markId: ${markId}`);
-    setShowCommentInputFor(markId);
-    // setActiveSectionKeyForComment('fullDocument'); // Associate with the whole document for now
-    // Optional: Scroll the new mark into view after it's added and the input opens
-    setTimeout(() => handleScrollToMark(markId), 100);
-  };
-
-  // Function to close comment input
-  const handleCommentInputClose = () => {
-    console.log("[MainContent] Closing comment input sidebar");
-    setShowCommentInputFor(null);
-    // setActiveSectionKeyForComment(null);
-  };
-
-  // Function to submit comment (Keep this, triggered by CommentInputSidebar)
-  const handleCommentSubmit = async (commentData: {
-        comment_text: string;
-        legislation_id: string;
-        section_key: string; // Still needed for backend/storage logic
-        mark_id: string;
-    }) => {
-      console.log("[MainContent] Submitting comment via API call:", commentData);
-      // The actual API call logic remains the same
-      try {
-          const response = await fetch('/api/comments', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({...commentData, section_key: 'fullDocument' }), // Force section_key for now
-          });
-
-          if (!response.ok) {
-              const errorData = await response.json();
-              throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
-          }
-
-          const newComment: Comment = await response.json();
-          console.log("[MainContent] Comment submitted successfully, adding to store:", newComment);
-
-          addComment(newComment); // Use Zustand action
-
-          // Use submitStatus for feedback, but maybe a different state is better for comments?
-          // setSubmitStatus({ type: 'success', message: 'Comment added!'});
-          // setTimeout(() => setSubmitStatus(null), 3000);
-
-          handleCommentInputClose(); // Close input sidebar on success
-
-      } catch (error: any) {
-          console.error("[MainContent] Failed to submit comment:", error);
-          // setSubmitStatus({ type: 'error', message: `Comment submission failed: ${error.message}` });
-          // Display error within the input sidebar itself?
-          throw error; // Re-throw for the input sidebar to handle
-      }
+    console.log(`[MainContent] Add comment triggered for markId: ${markId}. Activating input in RightSidebar.`);
+    setActiveCommentInputMarkId(markId); // Use store action to set the active mark ID
+    // RightSidebar will react to activeCommentInputMarkId and show input
+    // Optional: Scroll the new mark into view immediately? 
+    setTimeout(() => handleScrollToMark(markId), 100); 
   };
 
   // --- NEW: View Mode State ---
@@ -662,20 +562,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
               )}
             </div>
         </div>
-
-         {/* Comment Input Sidebar (positioning might need review based on layout changes) */}
-         {/* Only allow adding comments in Edit mode? Or also View Changes? Let's stick to Edit for now */}
-         {viewMode === 'edit' && showCommentInputFor && selectedLegislation && (
-          <div className="absolute top-0 right-0 h-full z-30">
-              <CommentInputSidebar
-                 markId={showCommentInputFor}
-                 legislationId={selectedLegislation.identifier}
-                 sectionKey={'fullDocument'}
-                 onSubmit={handleCommentSubmit}
-                 onClose={handleCommentInputClose}
-              />
-          </div>
-         )}
     </div>
   );
 }

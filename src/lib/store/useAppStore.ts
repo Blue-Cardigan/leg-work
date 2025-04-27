@@ -100,6 +100,17 @@ interface AppState {
   isSubmitting: boolean;
   submitStatus: { type: 'success' | 'error'; message: string } | null;
 
+  // --- NEW: State for managing comment input within RightSidebar ---
+  activeCommentInputMarkId: string | null; // Which mark_id are we creating a comment for?
+  isSubmittingComment: boolean; // Loading state for comment submission
+  commentSubmitError: string | null; // Error state for comment submission
+  // --- END NEW ---
+
+  // --- NEW: Right Sidebar Content State ---
+  rightSidebarContent: 'chat' | 'comments'; // What to show in the right sidebar
+  isRightSidebarOpen: boolean; // NEW: Track visibility
+  // --- END NEW ---
+
   // Actions are now top-level methods
   fetchLegislationList: () => Promise<void>;
   setSearchTerm: (term: string) => void;
@@ -142,6 +153,13 @@ interface AppState {
 
   // --- Add action for comment sidebar ---
   toggleCommentSidebar: () => void;
+
+  // --- NEW: Add missing action signatures ---
+  setActiveCommentInputMarkId: (markId: string | null) => void;
+  submitComment: (commentData: { comment_text: string; legislation_id: string; mark_id: string; section_key?: string }) => Promise<{ success: boolean }>;
+  setRightSidebarContent: (contentType: 'chat' | 'comments') => void;
+  toggleRightSidebar: () => void; // NEW: Action signature
+  // --- END NEW ---
 }
 
 // Create the Zustand store with Immer middleware for easier state updates
@@ -189,6 +207,17 @@ export const useAppStore = create(
     isSubmitting: false,
     submitStatus: null,
 
+    // --- NEW: Comment Input Initial State ---
+    activeCommentInputMarkId: null,
+    isSubmittingComment: false,
+    commentSubmitError: null,
+    // --- END NEW ---
+
+    // --- NEW: Right Sidebar Initial State ---
+    rightSidebarContent: 'chat',
+    isRightSidebarOpen: false, // NEW: Default to closed
+    // --- END NEW ---
+
     // --- Actions are now defined directly --- 
     fetchLegislationList: async () => {
       if (get().isLoadingList) return; 
@@ -232,7 +261,10 @@ export const useAppStore = create(
               state.isLoadingComments = false;
               state.focusedCommentId = null; 
               state.focusedMarkId = null;
-              state.isSidebarCollapsed = true; // Collapse sidebar on selection
+              state.activeCommentInputMarkId = null; // Reset comment input trigger
+              state.rightSidebarContent = 'chat'; // Reset sidebar content
+              state.isSidebarCollapsed = false; // Expand left sidebar
+              state.isCommentSidebarOpen = false;
             }
           }
         });
@@ -272,6 +304,7 @@ export const useAppStore = create(
       }
 
       set((state) => {
+        const isNewSelection = item?.href !== state.selectedLegislation?.href;
         state.selectedLegislation = item;
         state.selectedLegislationContent = null; 
         state.fullDocumentHtml = null; // Explicitly clear combined HTML
@@ -286,16 +319,15 @@ export const useAppStore = create(
         state.isLoadingComments = false;
         state.focusedCommentId = null; 
         state.focusedMarkId = null;
-        state.isCommentSidebarOpen = false; // Close comment sidebar
+        state.activeCommentInputMarkId = null; // Reset comment input trigger
+        state.isCommentSidebarOpen = false;
         state.submitStatus = null; // Clear any previous submit status
+        state.rightSidebarContent = 'chat'; // Default to chat on new selection
 
         // Collapse sidebar ONLY if selecting a NEW item
-        if (item) {
-          // Don't collapse if already collapsed - allows re-clicking to fetch
-          if (!state.isSidebarCollapsed) {
+        if (item && isNewSelection && !state.isSidebarCollapsed) {
           state.isSidebarCollapsed = true;
-          }
-        } else {
+        } else if (!item) {
            // If clearing selection, expand sidebar
            state.isSidebarCollapsed = false;
         }
@@ -311,7 +343,7 @@ export const useAppStore = create(
     fetchLegislationContent: async (urlToFetch: string) => {
       if (!urlToFetch) {
         console.warn("[Store] fetchLegislationContent called with no URL.");
-        set({ selectedLegislationContent: null, isLoadingContent: false, fullDocumentHtml: null, hasUnsavedChanges: false, comments: [] });
+        set({ selectedLegislationContent: null, isLoadingContent: false, fullDocumentHtml: null, initialFullDocumentHtml: null, hasUnsavedChanges: false, comments: [], activeCommentInputMarkId: null });
         return;
       }
 
@@ -332,6 +364,7 @@ export const useAppStore = create(
          state.isCommentSidebarOpen = false; // Close comment sidebar
          state.focusedMarkId = null;
          state.focusedCommentId = null;
+         state.activeCommentInputMarkId = null; // Reset comment input
          state.submitStatus = null; // Clear submit status
       });
 
@@ -758,8 +791,83 @@ export const useAppStore = create(
 
     // --- Add action for comment sidebar ---
     toggleCommentSidebar: () => {
+      console.warn("toggleCommentSidebar might be obsolete. Use setRightSidebarContent?");
       set((state) => ({ isCommentSidebarOpen: !state.isCommentSidebarOpen }));
     },
+
+    // --- NEW: Comment Input/Submission Actions Implementation ---
+    setActiveCommentInputMarkId: (markId: string | null) => {
+        set((state) => {
+            state.activeCommentInputMarkId = markId;
+            state.commentSubmitError = null; // Clear previous errors when opening/closing
+            // If opening the input, ensure the right sidebar shows comments
+            if (markId !== null) {
+                state.rightSidebarContent = 'comments';
+            }
+        });
+    },
+
+    submitComment: async (commentData: { comment_text: string; legislation_id: string; mark_id: string; section_key?: string }) => {
+        if (!commentData.comment_text.trim() || !commentData.legislation_id || !commentData.mark_id) {
+            console.error("Submit comment failed: Missing required data", commentData);
+            set({ commentSubmitError: "Missing comment text, legislation ID, or mark ID.", isSubmittingComment: false });
+            return { success: false };
+        }
+
+        set({ isSubmittingComment: true, commentSubmitError: null });
+
+        try {
+            const payload = { ...commentData, section_key: commentData.section_key || 'fullDocument' };
+            console.log("[Store] Submitting comment via API call:", payload);
+
+            const response = await fetch('/api/comments', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
+            }
+
+            const newComment: Comment = await response.json();
+            console.log("[Store] Comment submitted successfully, adding to store:", newComment);
+
+            get().addComment(newComment);
+            set({ isSubmittingComment: false, activeCommentInputMarkId: null });
+            return { success: true };
+
+        } catch (error: any) {
+            const message = error.message || "Failed to submit comment.";
+            console.error("[Store] Failed to submit comment:", error);
+            set({ isSubmittingComment: false, commentSubmitError: message });
+            return { success: false };
+        }
+    },
+    // --- END NEW ---
+
+    // --- NEW: Right Sidebar Action Implementation ---
+    setRightSidebarContent: (contentType: 'chat' | 'comments') => {
+        set(state => {
+            state.rightSidebarContent = contentType;
+            // If switching away from comments, ensure the comment input is closed
+            if (contentType !== 'comments') {
+                state.activeCommentInputMarkId = null;
+                state.commentSubmitError = null;
+            }
+            // Ensure the sidebar is open when content type is set explicitly
+            if (!state.isRightSidebarOpen) {
+                state.isRightSidebarOpen = true;
+            }
+        });
+    },
+    toggleRightSidebar: () => { // NEW: Implement toggle action
+        set(state => {
+            state.isRightSidebarOpen = !state.isRightSidebarOpen;
+        });
+    },
+    // --- END NEW ---
   }))
 );
 
@@ -831,22 +939,34 @@ export const useFocusedCommentId = () => useAppStore((state) => state.focusedCom
 export const useFocusedMarkId = () => useAppStore((state) => state.focusedMarkId); // Hook for focused mark
 
 // Action Hook for Comments
-export const useCommentActions = () => useAppStore((state) => ({
-  fetchComments: state.fetchComments,
-  addComment: state.addComment,
-  setFocusedCommentId: state.setFocusedCommentId,
-  setFocusedMarkId: state.setFocusedMarkId,
-}));
+export const useCommentActions = () => {
+  const fetchComments = useAppStore((state) => state.fetchComments);
+  const addComment = useAppStore((state) => state.addComment);
+  const setFocusedCommentId = useAppStore((state) => state.setFocusedCommentId);
+  const setFocusedMarkId = useAppStore((state) => state.setFocusedMarkId);
+  const setActiveCommentInputMarkId = useAppStore((state) => state.setActiveCommentInputMarkId);
+  const submitComment = useAppStore((state) => state.submitComment);
 
-// Selectors for sidebar state
+  return useMemo(() => ({
+    fetchComments,
+    addComment,
+    setFocusedCommentId,
+    setFocusedMarkId,
+    setActiveCommentInputMarkId,
+    submitComment,
+  }), [fetchComments, addComment, setFocusedCommentId, setFocusedMarkId, setActiveCommentInputMarkId, submitComment]);
+};
+
+// Selector for sidebar state
 export const useIsSidebarCollapsed = () => useAppStore((state) => state.isSidebarCollapsed);
 
 // Selector for comment sidebar visibility
 export const useIsCommentSidebarOpen = () => useAppStore((state) => state.isCommentSidebarOpen);
 
-// Selector for submission status
 export const useSubmitStatus = () => useAppStore((state) => state.submitStatus);
 export const useIsSubmitting = () => useAppStore((state) => state.isSubmitting);
-
-// Remove duplicate type export line
-// export type { LegislationItem, TocItem, LegislationContent, ChatMessage, ChatMessagePart, Comment };
+export const useActiveCommentInputMarkId = () => useAppStore((state) => state.activeCommentInputMarkId);
+export const useIsSubmittingComment = () => useAppStore((state) => state.isSubmittingComment);
+export const useCommentSubmitError = () => useAppStore((state) => state.commentSubmitError);
+export const useRightSidebarContent = () => useAppStore((state) => state.rightSidebarContent);
+export const useIsRightSidebarOpen = () => useAppStore((state) => state.isRightSidebarOpen); // NEW: Selector

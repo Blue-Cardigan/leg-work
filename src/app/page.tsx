@@ -6,7 +6,7 @@ import MainContent from "@/components/MainContent";
 import RightSidebar from "@/components/RightSidebar";
 import TableOfContents from '@/components/TableOfContents'; // Import TOC component
 import CommentDisplaySidebar from '@/components/CommentDisplaySidebar'; // Import Comment Display Sidebar
-import { useAppStore, useIsSidebarCollapsed, useIsCommentSidebarOpen } from '@/lib/store/useAppStore'; // Import store and specific hooks
+import { useAppStore, useIsSidebarCollapsed, useIsCommentSidebarOpen, useIsRightSidebarOpen } from '@/lib/store/useAppStore'; // Import store and specific hooks
 // Removed LegislationProvider - Assuming Zustand handles context
 // import { LegislationProvider } from "@/context/LegislationContext";
 
@@ -20,6 +20,7 @@ export default function Home() {
   const selectedLegislation = useAppStore((state) => state.selectedLegislation); // Needed to check if TOC should display
   const isSidebarCollapsed = useIsSidebarCollapsed(); // Get sidebar state
   const isCommentSidebarOpen = useIsCommentSidebarOpen(); // Get comment sidebar state
+  const isRightSidebarOpen = useIsRightSidebarOpen(); // <-- Get right sidebar state
 
   // --- Handlers --- 
   const handleTocItemVisible = (id: string) => {
@@ -72,10 +73,12 @@ export default function Home() {
             </div>
         )}
 
-        {/* Right Sidebar (Chat) */}
-        <div className="w-1/4 min-w-[300px] flex-shrink-0 bg-gray-50 dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto h-full">
-          <RightSidebar />
-        </div>
+        {/* Right Sidebar (Chat/Comments) - Conditionally render */}
+        {isRightSidebarOpen && (
+          <div className="flex-shrink-0 bg-gray-50 dark:bg-gray-800 border-l border-gray-200 dark:border-gray-700 overflow-y-auto h-full">
+            <RightSidebar />
+          </div>
+        )}
       </div>
     // Removed closing LegislationProvider tag
   );
