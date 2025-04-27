@@ -5,7 +5,7 @@ import { useAppStore, LegislationContent, Comment, useFocusedMarkId, useActiveCo
 import LegislationEditor from './LegislationEditor'; // Import the Tiptap component
 import LegislationToolbar from './LegislationToolbar'; // Import the toolbar
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"; // Reverting to standard Shadcn path
-import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown } from "lucide-react"; // Added ChevronUp/Down
+import { Terminal, Loader2, Eye, Pencil, GitCompareArrows, X, AlertCircle, ChevronUp, ChevronDown, Send, Trash2 } from "lucide-react"; // Added Send, Trash2
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group" // Import ToggleGroup
 import { createClient } from '@/lib/supabaseClient'; // Import Supabase client factory
 import { Button } from "@/components/ui/button"; // Import Button for collapse toggle
@@ -68,6 +68,12 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
     fetchComments,
     setFocusedMarkId,
     initialFullDocumentHtml, // <-- Get initial HTML for correct base setting
+    // --- NEW: State and actions for submit/discard buttons --- 
+    hasUnsavedChanges,
+    isSubmitting,
+    submitChangesForReview,
+    resetContent,
+    // --- END NEW ---
   } = useAppStore();
   const focusedMarkId = useFocusedMarkId();
   const activeCommentInputMarkId = useActiveCommentInputMarkId();
@@ -219,6 +225,25 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
       // However, if global HTML changes *while* in edit mode (e.g., due to external update/reset),
       // we might need a strategy (prompt user? discard local changes?). For now, let's keep local changes.
   }, [viewMode, fullDocumentHtml, localEditorContent]); // Rerun when mode or global HTML changes - Added localEditorContent
+  // --- END NEW ---
+
+  // --- NEW: Effect to sync local content when global HTML changes externally (e.g., applySuggestion) ---
+  useEffect(() => {
+    // Only run this sync logic when in edit mode
+    if (viewMode === 'edit' && fullDocumentHtml !== null && localEditorContent !== null) {
+      // If the global HTML is different from the local editing state,
+      // it implies an external update occurred (like applySuggestion).
+      if (fullDocumentHtml !== localEditorContent) {
+        console.log("[MainContent Sync Effect] External change detected in fullDocumentHtml while in edit mode. Syncing localEditorContent.");
+        setLocalEditorContent(fullDocumentHtml);
+        // Optional: Force editor update if setContent doesn't trigger it reliably enough for decorations
+        // if (editorInstance) {
+        //   editorInstance.commands.setContent(fullDocumentHtml, false); 
+        // }
+      }
+    }
+    // Depend only on fullDocumentHtml; viewMode and localEditorContent are checked inside.
+  }, [fullDocumentHtml]); 
   // --- END NEW ---
 
   // --- Fetch ALL Pending Changes and Determine Base HTML ---
@@ -378,6 +403,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   let editorContentToShow: string | null = null;
   let baseHtmlForEditor: string | null = null;
   let currentHtmlForEditor: string | null = null;
+  let changesForEditor: ProposedChange[] = []; // <-- New prop value
 
   switch (viewMode) {
       case 'view':
@@ -389,6 +415,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
           if (isDiffDataReady) {
               baseHtmlForEditor = baseHtmlForDiff; // Original before changes
               currentHtmlForEditor = finalProposedHtml; // Final state after changes
+              changesForEditor = allPendingChanges; // <-- Pass changes
           }
           break;
       case 'edit':
@@ -396,6 +423,7 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
           if (isDiffDataReady) {
               baseHtmlForEditor = baseHtmlForDiff; // Original before changes
               currentHtmlForEditor = localEditorContent; // Compare against local edits
+              changesForEditor = allPendingChanges; // <-- Pass changes (might be useful for context)
           }
           break;
   }
@@ -404,6 +432,35 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
   console.log(` - baseHtmlForEditor: ${baseHtmlForEditor !== null ? baseHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
   console.log(` - currentHtmlForEditor: ${currentHtmlForEditor !== null ? currentHtmlForEditor.substring(0, 50) + '...' : 'null'}`);
   console.log(` - editorContentToShow: ${editorContentToShow !== null ? editorContentToShow.substring(0, 50) + '...' : 'null'}`);
+
+  // --- NEW: Handle Discard Logic --- 
+  const handleDiscard = () => {
+    if (confirm("Are you sure you want to discard your changes? This cannot be undone.")) {
+        console.log("Discarding changes...");
+        resetContent(); // Reset global store state
+        // --- NEW: Reset local state and switch mode --- 
+        setLocalEditorContent(initialFullDocumentHtml ?? ''); // Revert local editor content
+        setViewMode('view'); // Switch back to view mode
+        console.log("Switched back to view mode after discard.");
+        // --- END NEW ---
+    }
+  };
+  // --- END NEW ---
+
+  // --- NEW: Handler to save local changes to store and submit --- 
+  const handleSaveChangesAndSubmit = () => {
+    if (localEditorContent !== null) {
+      console.log("[MainContent] Saving local changes to store before submitting...");
+      setFullDocumentHtml(localEditorContent);
+      // Now that the store is updated, hasUnsavedChanges should become true,
+      // and submitChangesForReview can use the latest content.
+      console.log("[MainContent] Triggering submitChangesForReview...");
+      submitChangesForReview();
+    } else {
+      console.warn("[MainContent] Attempted to save and submit with null localEditorContent.");
+    }
+  };
+  // --- END NEW ---
 
   // --- Main Render ---
   return (
@@ -432,7 +489,37 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                          <Pencil className="h-4 w-4 mr-1" /> Edit
                     </ToggleGroupItem>
                 </ToggleGroup>
-                 {/* --- NEW: Collapse Toggle Button (Always Visible) --- */}
+                 {/* --- NEW: Submit/Discard Buttons (only in Edit mode) --- */}
+                 {viewMode === 'edit' && (
+                     <div className="flex items-center space-x-2">
+                         {hasUnsavedChanges && (
+                             <Button
+                                 variant="outline"
+                                 onClick={handleDiscard}
+                                 disabled={isSubmitting || localEditorContent === initialFullDocumentHtml} // Check local state in edit mode
+                                 size="sm"
+                                 title="Discard Changes"
+                             >
+                                 <Trash2 className="h-4 w-4" />
+                             </Button>
+                         )}
+                         <Button
+                             onClick={handleSaveChangesAndSubmit} // Use new handler
+                             disabled={isSubmitting || localEditorContent === initialFullDocumentHtml} // Check local state
+                             size="sm"
+                             className={localEditorContent !== initialFullDocumentHtml ? "bg-green-600 hover:bg-green-700" : ""} // Style based on local state
+                             title={localEditorContent !== initialFullDocumentHtml ? "Submit Changes for Review" : "No changes to submit"} // Title based on local state
+                         >
+                             {isSubmitting ? (
+                                 <Loader2 className="animate-spin h-4 w-4" />
+                             ) : (
+                                 <Send className="h-4 w-4" />
+                             )}
+                         </Button>
+                     </div>
+                 )}
+                 {/* --- END NEW --- */}
+                 {/* --- Collapse Toggle Button (Always Visible) --- */}
                  <Button
                     variant="ghost"
                     size="sm"
@@ -495,9 +582,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                  </div>
              )}
 
-        </div> {/* End of collapsible header area */}
+        </div>
 
-         {/* --- NEW: Floating Expand Header Button --- */}
         {isHeaderCollapsed && (
             <Button
                 variant="ghost"
@@ -509,7 +595,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                 <ChevronDown className="h-6 w-6" />
             </Button>
         )}
-        {/* --- END NEW --- */}
 
         {/* --- Sticky Toolbar Area (Non-Scrolling) --- */}
         {/* Only show toolbar in Edit mode - Remains visible even if header above is collapsed */}
@@ -527,7 +612,6 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
             </div>
         )}
 
-        {/* --- Scrollable Editor Area --- */}
         {/* Removed collapse styling from here */}
         {/* Padding top adjusted based on edit mode (toolbar presence), not collapse state */}
         <div
@@ -548,6 +632,8 @@ export default function MainContent({ }: MainContentProps) { // Props might be e
                       // Pass diff props only when ready
                       baseHtmlForDiff={baseHtmlForEditor}
                       currentHtmlForDiff={currentHtmlForEditor}
+                      // --- Pass the full changes list ---
+                      allPendingChanges={changesForEditor}
                   />
               ) : (
                   // This case should ideally be caught by the top-level isLoading check,

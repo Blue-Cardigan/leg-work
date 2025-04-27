@@ -134,13 +134,7 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
   const isLoggedIn = !authLoading && !!user;
 
   // --- Get state and actions for relocated buttons ---
-  const hasUnsavedChanges = useAppStore((state) => state.hasUnsavedChanges);
-  const isSubmitting = useAppStore((state) => state.isSubmitting);
-  const submitChangesForReview = useAppStore((state) => state.submitChangesForReview);
-  const resetContent = useAppStore((state) => state.resetContent);
-  const isCommentSidebarOpen = useAppStore((state) => state.isCommentSidebarOpen);
-  const toggleCommentSidebar = useAppStore((state) => state.toggleCommentSidebar);
-  const comments = useAppStore((state) => state.comments);
+  const comments = useAppStore((state) => state.comments); // Keep comments for badge
 
   // --- NEW: Get right sidebar state and action --- 
   const rightSidebarContent = useRightSidebarContent();
@@ -148,14 +142,6 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
   const isRightSidebarOpen = useIsRightSidebarOpen(); // Get the state
   const toggleRightSidebar = useAppStore((state) => state.toggleRightSidebar); // Get the action
   // --- END NEW ---
-
-  const handleDiscard = () => {
-    if (confirm("Are you sure you want to discard your changes? This cannot be undone.")) {
-        console.log("Discarding changes...");
-        resetContent();
-        // Optionally show a temporary success message here or rely on store's submitStatus
-    }
-  };
 
   // --- NEW: Handler for combined right sidebar toggle --- 
   const handleRightSidebarToggle = (contentType?: 'chat' | 'comments') => {
@@ -297,60 +283,34 @@ export default function LeftSidebar({ activeTocId, isTocVisible, toggleTocVisibi
               </div>
             </div>
 
-            {/* --- Document Action Buttons (Expanded View Only) --- */}
+            {/* --- NEW: Minimal Right Sidebar Toggles (only chat/comment icons) --- */}
             {selectedLegislation && !isSidebarCollapsed && (
-                <div className="p-2 px-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center space-x-2">
-                    {/* --- Right Sidebar Toggle Buttons --- */} 
-                    <div className="flex items-center space-x-1">
-                        <Button
-                          variant={isRightSidebarOpen && rightSidebarContent === 'chat' ? 'secondary' : 'ghost'}
-                          size="sm"
-                          onClick={() => handleRightSidebarToggle('chat')}
-                          title={isRightSidebarOpen && rightSidebarContent === 'chat' ? "Close Chat Panel" : "Show AI Chat"}
-                        >
-                          <MessageCircle className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant={isRightSidebarOpen && rightSidebarContent === 'comments' ? 'secondary' : 'ghost'}
-                          size="sm"
-                          onClick={() => handleRightSidebarToggle('comments')}
-                          title={isRightSidebarOpen && rightSidebarContent === 'comments' ? "Close Comments Panel" : "Show Comments"}
-                          className="relative"
-                        >
-                          <MessageSquare className="h-4 w-4" />
-                          {Array.isArray(comments) && comments.length > 0 && (
-                             <span className="absolute top-0 right-0 block h-3 w-3 transform translate-x-1 -translate-y-1 rounded-full bg-red-500 text-white text-[8px] flex items-center justify-center">
-                                {comments.length}
-                             </span>
-                          )}
-                        </Button>
-                    </div>
-                    {/* --- END Right Sidebar Toggle Buttons --- */}
-
-                    {/* --- Legislation Change Actions --- */}
-                    <div className="flex items-center space-x-2">
-                        {hasUnsavedChanges && (
-                            <Button variant="outline" onClick={handleDiscard} disabled={isSubmitting} size="sm" title="Discard Changes">
-                                <Trash2 className="h-4 w-4" />
-                            </Button>
+                <div className="p-2 px-4 border-b border-gray-200 dark:border-gray-700 flex justify-start items-center space-x-1">
+                    <Button
+                        variant={isRightSidebarOpen && rightSidebarContent === 'chat' ? 'secondary' : 'ghost'}
+                        size="sm"
+                        onClick={() => handleRightSidebarToggle('chat')}
+                        title={isRightSidebarOpen && rightSidebarContent === 'chat' ? "Close Chat Panel" : "Show AI Chat"}
+                    >
+                        <MessageCircle className="h-4 w-4" />
+                    </Button>
+                    <Button
+                        variant={isRightSidebarOpen && rightSidebarContent === 'comments' ? 'secondary' : 'ghost'}
+                        size="sm"
+                        onClick={() => handleRightSidebarToggle('comments')}
+                        title={isRightSidebarOpen && rightSidebarContent === 'comments' ? "Close Comments Panel" : "Show Comments"}
+                        className="relative"
+                    >
+                        <MessageSquare className="h-4 w-4" />
+                        {Array.isArray(comments) && comments.length > 0 && (
+                           <span className="absolute top-0 right-0 block h-3 w-3 transform translate-x-1 -translate-y-1 rounded-full bg-red-500 text-white text-[8px] flex items-center justify-center">
+                              {comments.length}
+                           </span>
                         )}
-                        <Button
-                            onClick={submitChangesForReview}
-                            disabled={!hasUnsavedChanges || isSubmitting}
-                            size="sm"
-                            className={hasUnsavedChanges ? "bg-green-600 hover:bg-green-700" : ""}
-                            title={hasUnsavedChanges ? "Submit Changes for Review" : "No changes to submit"}
-                        >
-                            {isSubmitting ? (
-                                <Loader2 className="animate-spin h-4 w-4" />
-                            ) : (
-                                <Send className="h-4 w-4" />
-                            )}
-                        </Button>
-                    </div>
-                    {/* --- END Legislation Change Actions --- */}
+                    </Button>
                 </div>
             )}
+            {/* --- END NEW Minimal Toggles --- */}
 
             {/* List Area */}
             <div className="flex-grow overflow-y-auto">

@@ -15,7 +15,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geist.className} h-full bg-background`}>
+    <html lang="en" className={`${geist.className} h-full bg-background`} suppressHydrationWarning>
       <body className="h-full flex flex-col">
         {/* You could add a header here if needed */}
         <main className="flex-grow overflow-hidden">
